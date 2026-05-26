@@ -1,0 +1,111 @@
+/* Game 区域布局：RPS 和 Follow 共用摄像头画面。 */
+.game-panel {
+    grid-column: 3;
+    grid-row: 1;
+}
+
+.game-panel .range-tools {
+    gap: 6px;
+}
+
+.game-panel .range-tools button {
+    font-size: 12px;
+    min-height: 32px;
+    padding: 0 10px;
+}
+
+.game-panel .panel-head {
+    gap: 8px;
+}
+
+/* 模式按钮当前态，仅用于 RPS / Follow 切换。 */
+.tool-button.active {
+    background: var(--green);
+    border-color: var(--green);
+    color: #f7fbf7;
+}
+
+.tool-button.active:hover {
+    background: var(--green);
+    border-color: var(--green);
+    color: #f7fbf7;
+}
+
+/* 摄像头列表：启动前可展示授权提示，授权后默认勾选第一个设备。 */
+.camera-picker {
+    gap: 8px;
+    margin-bottom: 12px;
+    max-height: 108px;
+    overflow: auto;
+}
+
+.camera-option {
+    background: var(--surface-subtle);
+    border-color: var(--line);
+    border-radius: 7px;
+    min-height: 44px;
+    padding: 9px 10px;
+}
+
+.camera-option:hover {
+    border-color: var(--line-strong);
+}
+
+.camera-option input {
+    accent-color: var(--green);
+}
+
+/* 摄像头画面和识别结果覆盖层。 */
+.camera-stage {
+    aspect-ratio: 4 / 3;
+    background: #121817;
+    border-radius: 8px;
+}
+
+.gesture-readout {
+    background: linear-gradient(0deg, rgba(18, 24, 23, 0.82), rgba(18, 24, 23, 0));
+    padding: 42px 14px 12px;
+}
+
+#gestureName {
+    font-size: 28px;
+    line-height: 1;
+}
+
+#gestureConfidence {
+    font-size: 14px;
+}
+
+/* 调试输出和发送结果，Follow 模式会展示映射后的关节百分比。 */
+.debug-lines {
+    background: var(--surface-subtle);
+    border: 1px solid var(--line);
+    border-radius: 7px;
+    color: var(--muted);
+    font-size: 11px;
+    line-height: 1.55;
+    margin-top: 12px;
+    max-height: 118px;
+    min-height: 86px;
+    overflow: auto;
+    padding: 10px;
+}
+
+.game-result {
+    border-left-color: var(--amber);
+}
+
+@media (max-width: 1180px) {
+    .game-panel {
+        grid-column: 1 / -1;
+        grid-row: 2;
+    }
+}
+
+@media (max-width: 760px) {
+    .game-panel {
+        grid-column: 1;
+        grid-row: auto;
+        margin-bottom: 0;
+    }
+}

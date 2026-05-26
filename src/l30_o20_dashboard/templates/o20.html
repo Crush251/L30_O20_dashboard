@@ -1,0 +1,137 @@
+<!doctype html>
+<html lang="zh-CN">
+    <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <title>O20 控制台</title>
+        <link rel="stylesheet" href="/static/app.css?v=17" />
+        <link rel="stylesheet" href="/static/game.css?v=2" />
+        <script src="/static/vendor/mediapipe/camera_utils/camera_utils.js" defer></script>
+        <script src="/static/vendor/mediapipe/drawing_utils/drawing_utils.js" defer></script>
+        <script src="/static/vendor/mediapipe/hands/hands.js" defer></script>
+        <script src="/static/gesture.js?v=2" defer></script>
+        <script src="/static/o20_config.js?v=5" defer></script>
+        <script src="/static/o20.js?v=22" defer></script>
+    </head>
+    <body>
+        <main class="shell">
+            <header class="topbar">
+                <div class="brand-block">
+                    <div class="title-row">
+                        <h1>O20 控制台</h1>
+                        <nav class="product-nav" aria-label="产品控制台">
+                            <a class="tool-button" href="/l30">L30</a>
+                            <a class="tool-button active" href="/o20">O20</a>
+                        </nav>
+                    </div>
+                </div>
+                <div class="status-pill" id="runtimeStatus">初始化</div>
+            </header>
+
+            <section class="workbench o20-workbench">
+                <aside class="panel devices-panel">
+                    <div class="panel-head">
+                        <h2>设备</h2>
+                        <button class="tool-button" id="scanBtn" type="button">扫描</button>
+                    </div>
+                    <div class="device-list" id="deviceList"></div>
+                    <div class="button-row">
+                        <button id="openBtn" type="button">连接所选</button>
+                    </div>
+                    <div class="embedded-dance">
+                        <div class="panel-head">
+                            <h2>Dance</h2>
+                            <div class="range-tools">
+                                <button class="tool-button" id="refreshDanceBtn" type="button">刷新</button>
+                                <button id="runDanceBtn" type="button">执行</button>
+                                <button class="tool-button" id="stopDanceBtn" type="button" disabled>停止</button>
+                            </div>
+                        </div>
+                        <div class="dance-file-list" id="danceFileList"></div>
+                        <div class="dance-controls">
+                            <label>
+                                <span>循环次数</span>
+                                <input id="danceLoopCount" type="number" min="0" step="1" value="0" />
+                            </label>
+                            <label>
+                                <span>发送间隔 ms</span>
+                                <input id="danceIntervalMs" type="number" min="0" step="1" value="30" />
+                            </label>
+                        </div>
+                        <div class="dance-status" id="danceStatus">未执行</div>
+                    </div>
+                </aside>
+
+                <section class="panel o20-main-panel">
+                    <div class="panel-head">
+                        <div class="range-tools o20-main-tools">
+                            <button class="tool-button" id="o20InfoBtn" type="button">设备查询</button>
+                            <button class="tool-button" id="o20ErrorBtn" type="button">查询错误</button>
+                            <button class="tool-button" id="o20ClearErrorBtn" type="button">清除错误</button>
+                            <label class="compact-field">
+                                <span>FrameType</span>
+                                <select id="o20FrameType">
+                                    <option value="4" selected>0x04</option>
+                                    <option value="12">0x0C</option>
+                                </select>
+                            </label>
+                            <label class="compact-field">
+                                <span>速度%</span>
+                                <input id="o20Velocity" type="number" min="0" max="100" step="1" value="50" />
+                            </label>
+                            <button class="tool-button" id="o20VelocityBtn" type="button">写速度</button>
+                            <button id="o20ZeroBtn" type="button">回零</button>
+                        </div>
+                    </div>
+                    <div class="sliders o20-sliders" id="o20Sliders"></div>
+                    <div class="pose-recorder">
+                        <div class="pose-recorder-head">
+                            <h2>姿态序列</h2>
+                            <div class="range-tools">
+                                <button class="tool-button" id="poseRecordBtn" type="button">记录当前位置</button>
+                                <button class="tool-button" id="poseOverwriteBtn" type="button">覆盖</button>
+                            </div>
+                        </div>
+                        <div class="pose-list" id="poseList"></div>
+                        <div class="pose-actions">
+                            <button class="tool-button" id="poseRunBtn" type="button">执行</button>
+                            <button class="tool-button" id="poseDeleteBtn" type="button">删除</button>
+                            <input id="poseFileName" type="text" placeholder="文件名" />
+                            <button id="poseSaveBtn" type="button">保存</button>
+                        </div>
+                        <div class="pose-status" id="poseStatus">未记录</div>
+                    </div>
+                </section>
+
+                <section class="panel game-panel">
+                    <div class="panel-head">
+                        <h2>Game</h2>
+                        <div class="range-tools">
+                            <button class="tool-button active" id="rpsModeBtn" type="button">RPS</button>
+                            <button class="tool-button" id="followModeBtn" type="button">Follow</button>
+                            <button id="gameBtn" type="button">启动摄像头</button>
+                            <button class="tool-button" id="stopGameBtn" type="button" disabled>关闭摄像头</button>
+                        </div>
+                    </div>
+                    <div class="camera-picker" id="cameraList"></div>
+                    <div class="camera-stage">
+                        <video id="inputVideo" playsinline></video>
+                        <canvas id="outputCanvas"></canvas>
+                        <div class="gesture-readout">
+                            <span id="gestureName">未识别</span>
+                            <small id="gestureConfidence">0%</small>
+                        </div>
+                    </div>
+                    <div class="debug-lines" id="debugLines"></div>
+                </section>
+
+                <section class="panel log-panel">
+                    <div class="panel-head">
+                        <h2>日志</h2>
+                    </div>
+                    <pre class="tx-log" id="txLog"></pre>
+                </section>
+            </section>
+        </main>
+    </body>
+</html>

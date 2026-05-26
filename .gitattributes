@@ -1,0 +1,19 @@
+# Normalize text files across Windows/Linux checkouts.
+* text=auto eol=lf
+
+# Windows scripts need CRLF when checked out on Windows.
+*.bat text eol=crlf
+*.ps1 text eol=crlf
+
+# Keep binary assets untouched.
+*.dll binary
+*.so binary
+*.wasm binary
+*.data binary
+*.tflite binary
+*.pyz binary
+*.zip binary
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.ico binary
