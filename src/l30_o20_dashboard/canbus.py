@@ -244,16 +244,46 @@ class CanBusController:
                 "devices": [self._device_payload(self.devices[dev]) for dev in range(count)],
             }
 
-    def open_devices(self, dev_ids: Iterable[int]) -> list[dict]:
-        """打开指定设备，已打开的设备会直接复用。"""
+    def open_devices(self, dev_ids: Iterable[int], force: bool = False) -> list[dict]:
+        """打开指定设备，已打开的设备会直接复用；force=True 时显式尝试接管。"""
         opened = []
         with self.lock:
             for dev in sorted({int(x) for x in dev_ids}):
                 state = self.devices.setdefault(dev, DeviceState(dev=dev))
                 if not state.opened:
-                    self._open_one(state)
+                    try:
+                        self._open_one(state)
+                    except Exception as exc:
+                        if not force or not self._can_force_takeover(exc):
+                            raise
+                        self._force_release_device(state)
+                        try:
+                            self._open_one(state)
+                        except Exception as retry_exc:
+                            raise RuntimeError(
+                                f"force open dev={state.dev} failed after close/reopen: {retry_exc}"
+                            ) from retry_exc
                 opened.append(self._device_payload(state))
         return opened
+
+    def _can_force_takeover(self, exc: Exception) -> bool:
+        """判断打开失败是否属于可尝试强制接管的设备占用类错误。"""
+        message = str(exc).lower()
+        return "can_opendevice" in message or "busy" in message or "occupied" in message
+
+    def _force_release_device(self, state: DeviceState) -> None:
+        """显式尝试释放设备句柄；跨进程是否生效取决于厂商驱动。"""
+        state.opened = False
+        state.enabled = False
+        if self.mock:
+            return
+        try:
+            if self.win is not None:
+                self.win.close(state.dev)
+            else:
+                self._close_device(state.dev, state.ch)
+        finally:
+            time.sleep(0.12)
 
     def close_all(self) -> None:
         """关闭所有已打开设备，并清空使能状态。"""
@@ -637,6 +667,8 @@ class CanBusController:
         """把底层 DLL/so 错误转换成更适合界面展示的中文提示。"""
         if "is not opened" in message:
             return f"{message}. 请先在设备区勾选并连接该 CANFD 设备，发送路径不会自动打开设备。"
+        if "force open" in message:
+            return f"{message}. 已尝试强制接管，但驱动仍拒绝打开；请确认其他程序是否仍在占用该 USB-CANFD。"
         if "CAN_OpenDevice" in message and "failed: -1" in message:
             command = ".\\run_windows.bat" if self.system == "windows" else "./run_sudo.sh"
             return (

@@ -45,7 +45,7 @@
 
     function bindElements() {
         for (const id of [
-            "runtimeStatus", "deviceList", "scanBtn", "openBtn", "l30InfoBtn", "o20InfoBtn",
+            "runtimeStatus", "deviceList", "scanBtn", "openBtn", "forceOpenBtn", "deviceQueryBtn",
             "enableBtn", "disableBtn", "o20FrameType", "o20Velocity", "o20VelocityBtn",
             "o20ErrorBtn", "o20ClearErrorBtn", "txLog", "sliders", "zeroBtn", "sendBtn",
             "poseRecordBtn", "poseOverwriteBtn", "poseRunBtn", "poseDeleteBtn", "poseSaveL30Btn",
@@ -252,7 +252,16 @@
                 ? profile.l30InfoText
                 : profile.model === "o20"
                   ? profile.o20InfoText
-                  : profile.adapterInfoText || "请执行 L30查询 或 O20查询，或手动指定型号";
+                  : profile.adapterInfoText || "请执行设备查询，或手动指定型号";
+            const o20HandControl = profile.model === "o20" ? `
+                        <label class="compact-field o20-hand-field">
+                            <span>O20</span>
+                            <select class="device-hand-select" data-dev="${device.dev}">
+                                <option value="1" ${Number(profile.o20DeviceId) === 1 ? "selected" : ""}>右手 0x01</option>
+                                <option value="2" ${Number(profile.o20DeviceId) === 2 ? "selected" : ""}>左手 0x02</option>
+                            </select>
+                        </label>
+            ` : "";
             item.innerHTML = `
                 <input type="checkbox" ${state.selected.has(device.dev) ? "checked" : ""} data-dev="${device.dev}">
                 <div class="device-body">
@@ -270,13 +279,7 @@
                                 <option value="o20" ${profile.model === "o20" ? "selected" : ""}>O20</option>
                             </select>
                         </label>
-                        <label class="compact-field o20-hand-field">
-                            <span>O20</span>
-                            <select class="device-hand-select" data-dev="${device.dev}">
-                                <option value="1" ${Number(profile.o20DeviceId) === 1 ? "selected" : ""}>右手 0x01</option>
-                                <option value="2" ${Number(profile.o20DeviceId) === 2 ? "selected" : ""}>左手 0x02</option>
-                            </select>
-                        </label>
+                        ${o20HandControl}
                     </div>
                     <div class="device-meta"><strong>${modelText}</strong> · ${escapeHtml(meta)}</div>
                 </div>
@@ -292,11 +295,14 @@
                 setStatus(`DEV${event.target.dataset.dev} 型号设为 ${event.target.value.toUpperCase()}`);
                 renderDevices({ devices: state.devices, count: state.devices.length, mock: payload.mock });
             });
-            item.querySelector(".device-hand-select").addEventListener("change", (event) => {
-                const next = Number(event.target.value) || 1;
-                profileFor(event.target.dataset.dev).o20DeviceId = next;
-                setStatus(`DEV${event.target.dataset.dev} O20 节点设为 ${handName(next)} ${nodeText(next)}`);
-            });
+            const handSelect = item.querySelector(".device-hand-select");
+            if (handSelect) {
+                handSelect.addEventListener("change", (event) => {
+                    const next = Number(event.target.value) || 1;
+                    profileFor(event.target.dataset.dev).o20DeviceId = next;
+                    setStatus(`DEV${event.target.dataset.dev} O20 节点设为 ${handName(next)} ${nodeText(next)}`);
+                });
+            }
             els.deviceList.appendChild(item);
         }
 
@@ -407,51 +413,41 @@
         }
     }
 
-    async function openSelected() {
+    async function openSelected(force = false) {
         const devices = selectedDevices();
         if (!devices.length) return showError(new Error("请先勾选设备"));
         try {
-            await api("/api/open", { devices });
+            await api("/api/open", { devices, force });
             await refreshStatus();
-            setResult("设备已连接，请执行 L30查询 或 O20查询确认型号");
+            setResult(force ? "强制连接已完成，请执行设备查询确认型号" : "设备已连接，请执行设备查询确认型号");
         } catch (error) {
             showError(error);
         }
     }
 
-    async function queryL30Info() {
+    async function queryDevices() {
         const devices = selectedDevices();
         if (!devices.length) return showError(new Error("请先勾选设备"));
         try {
-            const result = await api("/api/l30/info", { devices });
-            const lines = (result.results || []).map((item) => {
-                if (item.matched && item.info && Object.keys(item.info).length) {
-                    applyL30Info(item.dev, item.info);
-                    return `DEV${item.dev} ${l30DeviceInfoText(item.info)}`;
-                }
-                return `DEV${item.dev} L30 无应答 · RX ${item.rx_count || 0}`;
+            const result = await api("/api/devices/query", {
+                devices,
+                frame_type: selectedFrameType()
             });
-            await refreshStatus();
-            setResult(lines.join("；") || "未查询到 L30 信息");
-        } catch (error) {
-            showError(error);
-        }
-    }
-
-    async function queryO20Info() {
-        const devices = selectedDevices();
-        if (!devices.length) return showError(new Error("请先勾选设备"));
-        try {
-            const result = await api("/api/o20/info", { devices, device_id: 0, frame_type: selectedFrameType() });
             const lines = [];
-            for (const item of result.results || []) {
-                if (item.matched && item.info && Object.keys(item.info).length) {
-                    applyO20Info(item.dev, item.device_id, item.info);
-                    lines.push(`DEV${item.dev} ${item.info.hand || handName(item.device_id)} ${nodeText(item.device_id)} ${o20InfoText(item.info)}`);
+            for (const profile of result.profiles || []) {
+                if (profile.model === "o20") {
+                    applyO20Info(profile.dev, profile.device_id, profile.info || {});
+                    lines.push(`DEV${profile.dev} O20 ${handName(profile.device_id)} ${nodeText(profile.device_id)}`);
+                } else if (profile.model === "l30") {
+                    applyL30Info(profile.dev, profile.info || {});
+                    lines.push(`DEV${profile.dev} L30 ${l30DeviceInfoText(profile.info || {})}`);
+                } else {
+                    profileFor(profile.dev).model = "unknown";
+                    lines.push(`DEV${profile.dev} 未识别`);
                 }
             }
             await refreshStatus();
-            setResult(lines.length ? `O20查询完成：${lines.join("；")}` : "未收到可解析的 O20 设备信息");
+            setResult(lines.length ? `设备查询完成：${lines.join("；")}` : "未查询到设备信息");
         } catch (error) {
             showError(error);
         }
@@ -1184,9 +1180,9 @@
 
     function bindEvents() {
         els.scanBtn.addEventListener("click", scanDevices);
-        els.openBtn.addEventListener("click", openSelected);
-        els.l30InfoBtn.addEventListener("click", queryL30Info);
-        els.o20InfoBtn.addEventListener("click", queryO20Info);
+        els.openBtn.addEventListener("click", () => void openSelected(false));
+        els.forceOpenBtn.addEventListener("click", () => void openSelected(true));
+        els.deviceQueryBtn.addEventListener("click", queryDevices);
         els.enableBtn.addEventListener("click", () => void setL30Enabled(true));
         els.disableBtn.addEventListener("click", () => void setL30Enabled(false));
         els.o20VelocityBtn.addEventListener("click", sendO20Velocity);

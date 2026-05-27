@@ -66,9 +66,9 @@ def create_app() -> FastAPI:
 
     @api.post("/api/open")
     def open_devices(payload: DeviceSelection) -> dict:
-        """打开前端勾选的设备。"""
+        """打开前端勾选的设备；force=True 时显式尝试接管被占用设备。"""
         try:
-            return {"devices": controller.open_devices(payload.devices)}
+            return {"devices": controller.open_devices(payload.devices, force=payload.force)}
         except (RuntimeError, OSError) as exc:
             raise HTTPException(status_code=409, detail=controller.explain_error(str(exc))) from exc
 
@@ -78,6 +78,74 @@ def create_app() -> FastAPI:
         try:
             return {"devices": controller.set_enabled(payload.devices, payload.enabled)}
         except (RuntimeError, OSError) as exc:
+            raise HTTPException(status_code=409, detail=controller.explain_error(str(exc))) from exc
+
+    @api.post("/api/devices/query")
+    def query_devices(payload: O20InfoRequest) -> dict:
+        """统一查询设备型号：优先识别 O20，未匹配时再按 L30 DeviceInFo 探测。"""
+        try:
+            devices = [int(dev) for dev in payload.devices]
+            o20_results = controller.query_o20_device_info(
+                devices,
+                device_id=0,
+                frame_type=payload.frame_type,
+            )
+            o20_by_dev: dict[int, dict] = {}
+            for item in o20_results:
+                info = item.get("info") or {}
+                if item.get("matched") and info:
+                    o20_by_dev.setdefault(int(item["dev"]), item)
+
+            l30_probe_devs = [dev for dev in devices if dev not in o20_by_dev]
+            l30_results = controller.query_l30_device_info(l30_probe_devs) if l30_probe_devs else []
+            l30_by_dev = {
+                int(item["dev"]): item
+                for item in l30_results
+                if item.get("matched") and item.get("info")
+            }
+
+            profiles = []
+            for dev in devices:
+                if dev in o20_by_dev:
+                    item = o20_by_dev[dev]
+                    profiles.append(
+                        {
+                            "dev": dev,
+                            "model": "o20",
+                            "matched": True,
+                            "device_id": item.get("device_id"),
+                            "info": item.get("info") or {},
+                            "source": "o20",
+                        }
+                    )
+                elif dev in l30_by_dev:
+                    item = l30_by_dev[dev]
+                    profiles.append(
+                        {
+                            "dev": dev,
+                            "model": "l30",
+                            "matched": True,
+                            "node_id": (item.get("info") or {}).get("node_id"),
+                            "info": item.get("info") or {},
+                            "source": "l30",
+                        }
+                    )
+                else:
+                    profiles.append(
+                        {
+                            "dev": dev,
+                            "model": "unknown",
+                            "matched": False,
+                            "info": {},
+                            "source": "",
+                        }
+                    )
+            return {
+                "profiles": profiles,
+                "o20_results": o20_results,
+                "l30_results": l30_results,
+            }
+        except (RuntimeError, ValueError, OSError) as exc:
             raise HTTPException(status_code=409, detail=controller.explain_error(str(exc))) from exc
 
     @api.post("/api/l30/info")

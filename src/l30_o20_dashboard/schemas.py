@@ -20,6 +20,7 @@ class DeviceSelection(BaseModel):
     """前端勾选的 USB-CANFD 设备编号列表。"""
 
     devices: list[int] = Field(default_factory=list)
+    force: bool = False
 
 
 class EnableRequest(DeviceSelection):
