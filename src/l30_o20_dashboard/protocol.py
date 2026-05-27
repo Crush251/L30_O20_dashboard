@@ -19,6 +19,31 @@ SCMD_GLOBAL_ENABLE = 0x07
 SCMD_GLOBAL_DISABLE = 0x08
 SCMD_DEVICE_INFO = 0x02
 
+# 通用状态码，适用于父命令 0x1~0x6。
+L30_STATUS_TEXT = {
+    0x00: "成功",
+    0x10: "DLC 或数据长度不匹配",
+    0x11: "参数越界或非法值",
+    0x12: "不支持的命令码",
+    0x13: "无效子命令",
+    0x14: "数据格式错误",
+    0x20: "权限不足或未解锁",
+    0x21: "未标定零点",
+    0x22: "电机未使能",
+    0x23: "设备当前状态不允许操作",
+    0x24: "设备当前未设置",
+    0x30: "读取电机数据异常",
+    0x31: "写入电机数据异常",
+    0x32: "多帧传输超时",
+    0x33: "多帧数据不完整",
+    0x34: "周期上报配置失败",
+    0x35: "上报周期越界",
+    0x36: "事件掩码无效",
+    0x40: "通信超时",
+    0x41: "通信丢失",
+    0xF0: "系统忙，稍后重试",
+}
+
 # 发送超时时间，Linux so 使用该值；Windows DLL 内部封装使用自己的值。
 TRANSMIT_TIMEOUT_MS = 200
 
@@ -89,14 +114,58 @@ def encode_empty_payload() -> bytes:
     return bytes([0x00, 0x00])
 
 
+def l30_status_text(status: int | None) -> str:
+    """把 L30 状态码转换为中文描述。"""
+    if status is None:
+        return "无状态码"
+    return L30_STATUS_TEXT.get(status, f"未知状态 0x{status:02X}")
+
+
+def parse_l30_response(data: bytes) -> dict[str, object]:
+    """解析 L30 通用应答头：BYTE0 长度、BYTE1 事务、BYTE2 状态。"""
+    raw = bytes(data)
+    if len(raw) < 3:
+        return {
+            "data_length": raw[0] if raw else 0,
+            "transaction": raw[1] if len(raw) > 1 else 0,
+            "status": None,
+            "status_text": "应答长度不足",
+            "payload": b"",
+        }
+    data_length = int(raw[0])
+    transaction = int(raw[1])
+    status = int(raw[2])
+    payload = raw[3 : 3 + data_length]
+    return {
+        "data_length": data_length,
+        "transaction": transaction,
+        "status": status,
+        "status_text": l30_status_text(status),
+        "payload": payload,
+    }
+
+
+def parse_l30_status(data: bytes) -> int | None:
+    """提取 L30 应答状态码。"""
+    response = parse_l30_response(data)
+    status = response.get("status")
+    return int(status) if status is not None else None
+
+
 def parse_l30_device_info(data: bytes) -> dict[str, str | int]:
     """解析 L30 DeviceInFo 应答中的 18 字节设备信息。"""
     raw = bytes(data)
-    if len(raw) >= 21 and raw[2] == 0x00:
-        raw = raw[3:21]
+    if len(raw) >= 21 and raw[2] in L30_STATUS_TEXT:
+        response = parse_l30_response(raw)
+        if response.get("status") != 0:
+            return {}
+        raw = bytes(response.get("payload", b""))[:18]
     elif len(raw) >= 18:
         raw = raw[:18]
     else:
+        return {}
+
+    if len(raw) < 18:
         return {}
 
     def version(offset: int) -> str:

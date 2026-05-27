@@ -45,8 +45,10 @@ from .protocol import (
     build_can_id,
     encode_empty_payload,
     encode_joint_payload,
+    l30_status_text,
     len_to_dlc,
     parse_l30_device_info,
+    parse_l30_status,
 )
 from .sequences import JOINT_COUNT
 from .win_l30_can import WindowsL30Can
@@ -104,7 +106,7 @@ class DeviceState:
     ch: int = CH
     opened: bool = False
     enabled: bool = False
-    info: dict[str, str] = field(default_factory=dict)
+    info: dict[str, object] = field(default_factory=dict)
     joints: list[int] = field(default_factory=lambda: [0] * JOINT_COUNT)
 
 
@@ -265,15 +267,33 @@ class CanBusController:
                 state.enabled = False
 
     def set_enabled(self, dev_ids: Iterable[int], enabled: bool) -> list[dict]:
-        """向设备发送全局使能或失能命令。"""
+        """向设备发送全局使能或失能命令，并校验 L30 应答状态码。"""
         results = []
         scmd = SCMD_GLOBAL_ENABLE if enabled else SCMD_GLOBAL_DISABLE
+        label = "l30-enable" if enabled else "l30-disable"
         data = encode_empty_payload()
         with self.lock:
             for state in self._selected_open_devices(dev_ids):
-                self._send(state, scmd, data, label="enable" if enabled else "disable")
+                ack = self._send_l30_command_with_ack(state, PCMD_JOINT_CTRL, scmd, data, label)
+                if not ack.get("matched"):
+                    info_result = self._discover_l30_device_info(state, timeout_ms=50)
+                    if info_result.get("matched"):
+                        ack = self._send_l30_command_with_ack(
+                            state, PCMD_JOINT_CTRL, scmd, data, label
+                        )
+                status = ack.get("status")
+                if status != 0:
+                    status_text = ack.get("status_text") or l30_status_text(
+                        int(status) if status is not None else None
+                    )
+                    raise RuntimeError(
+                        f"L30 {label} dev={state.dev} failed: status={status_text}, "
+                        f"rx_count={ack.get('rx_count', 0)}"
+                    )
                 state.enabled = enabled
-                results.append(self._device_payload(state))
+                payload = self._device_payload(state)
+                payload["ack"] = ack
+                results.append(payload)
         return results
 
     def set_joints(
@@ -300,44 +320,12 @@ class CanBusController:
                 results.append(self._device_payload(state))
         return results
 
-    def query_l30_device_info(self, dev_ids: Iterable[int], timeout_ms: int = 120) -> list[dict]:
-        """按 L30 新协议读取 DeviceInFo(父命令0x3, 子命令0x02)。"""
+    def query_l30_device_info(self, dev_ids: Iterable[int], timeout_ms: int = 50) -> list[dict]:
+        """按 L30 新协议读取 DeviceInFo，并自动探测设备当前 NodeID。"""
         results = []
-        read_id_cache: dict[int, int] = {}
         with self.lock:
             for state in self._selected_existing_open_devices(dev_ids):
-                read_id = build_can_id(
-                    PROTOCOL_PRIORITY, 0, PCMD_CONFIG, SCMD_DEVICE_INFO, DEVICE_ID, HOST_ID
-                )
-                read_id_cache[state.dev] = read_id
-                self._send_can_frame(state, read_id, encode_empty_payload(), label="l30-info-read")
-                messages = self._receive_canfd(state, timeout_ms=timeout_ms)
-                self._record_rx_frames(state, messages, label="l30-info-rx")
-                matched = None
-                matched_can_id = None
-                for can_id, data in messages:
-                    rx_id = can_id & 0x1FFFFFFF
-                    parent = (rx_id >> 21) & 0x0F
-                    subcmd = (rx_id >> 13) & 0xFF
-                    dst_id = (rx_id >> 8) & 0x1F
-                    src_id = (rx_id >> 3) & 0x1F
-                    if parent == PCMD_CONFIG and subcmd == SCMD_DEVICE_INFO and dst_id == HOST_ID and src_id == DEVICE_ID:
-                        matched = data
-                        matched_can_id = rx_id
-                        break
-                info = parse_l30_device_info(matched or b"") if matched is not None else {}
-                if info:
-                    state.info = {**state.info, **{key: str(value) for key, value in info.items()}}
-                results.append(
-                    {
-                        "dev": state.dev,
-                        "query_id": f"0x{read_id_cache[state.dev]:08X}",
-                        "reply_id": f"0x{matched_can_id:08X}" if matched_can_id is not None else "",
-                        "matched": matched is not None,
-                        "info": info,
-                        "rx_count": len(messages),
-                    }
-                )
+                results.append(self._discover_l30_device_info(state, timeout_ms=timeout_ms))
         return results
 
     def send_raw_joint_payload(
@@ -762,8 +750,162 @@ class CanBusController:
         return int(self.lib.CANFD_Init(dev, ch, ctypes.byref(config)))
 
     def _send(self, state: DeviceState, scmd: int, data: bytes, label: str) -> int:
-        can_id = build_can_id(PROTOCOL_PRIORITY, 1, PCMD_JOINT_CTRL, scmd, DEVICE_ID, HOST_ID)
+        can_id = self._build_l30_can_id(state, 1, PCMD_JOINT_CTRL, scmd)
         return self._send_can_frame(state, can_id, data, label)
+
+    def _build_l30_can_id(
+        self, state: DeviceState, access: int, pcmd: int, scmd: int, dst_id: int | None = None
+    ) -> int:
+        """按设备缓存 NodeID 生成 L30 CAN ID。"""
+        target_id = self._l30_node_id(state) if dst_id is None else int(dst_id)
+        return build_can_id(PROTOCOL_PRIORITY, access, pcmd, scmd, target_id, HOST_ID)
+
+    def _l30_node_id(self, state: DeviceState) -> int:
+        """读取该 USB-CAN 设备下当前 L30 NodeID，未知时默认设备 1。"""
+        for key in ("node_id", "l30_node_id"):
+            value = state.info.get(key)
+            try:
+                node_id = int(value)
+            except (TypeError, ValueError):
+                continue
+            if 1 <= node_id <= 31:
+                return node_id
+        return DEVICE_ID
+
+    def _l30_probe_node_ids(self, state: DeviceState) -> list[int]:
+        """优先探测已知 NodeID，再扫 1~31，兼容设备被改 ID 的情况。"""
+        candidates = [self._l30_node_id(state), DEVICE_ID, *range(1, 32)]
+        seen: set[int] = set()
+        ordered = []
+        for node_id in candidates:
+            if 1 <= int(node_id) <= 31 and int(node_id) not in seen:
+                seen.add(int(node_id))
+                ordered.append(int(node_id))
+        return ordered
+
+    def _send_l30_command_with_ack(
+        self,
+        state: DeviceState,
+        pcmd: int,
+        scmd: int,
+        data: bytes,
+        label: str,
+        timeout_ms: int = 100,
+    ) -> dict[str, object]:
+        """发送 L30 有应答命令，并返回匹配应答里的状态码。"""
+        dst_id = self._l30_node_id(state)
+        can_id = self._build_l30_can_id(state, 1, pcmd, scmd, dst_id=dst_id)
+        self._send_can_frame(state, can_id, data, label=label)
+        if self.mock:
+            return {
+                "matched": True,
+                "status": 0,
+                "status_text": l30_status_text(0),
+                "rx_count": 0,
+                "reply_id": "",
+            }
+        messages = self._receive_canfd(state, timeout_ms=timeout_ms)
+        self._record_rx_frames(state, messages, label=f"{label}-rx")
+        matched_data = None
+        matched_can_id = None
+        for rx_can_id, rx_data in messages:
+            rx_id = rx_can_id & 0x1FFFFFFF
+            parent = (rx_id >> 21) & 0x0F
+            subcmd = (rx_id >> 13) & 0xFF
+            dst = (rx_id >> 8) & 0x1F
+            src = (rx_id >> 3) & 0x1F
+            if parent == pcmd and subcmd == scmd and dst == HOST_ID and src == dst_id:
+                matched_data = rx_data
+                matched_can_id = rx_id
+                break
+        status = parse_l30_status(matched_data or b"") if matched_data is not None else None
+        return {
+            "matched": matched_data is not None,
+            "status": status,
+            "status_text": l30_status_text(status),
+            "rx_count": len(messages),
+            "reply_id": f"0x{matched_can_id:08X}" if matched_can_id is not None else "",
+        }
+
+    def _discover_l30_device_info(self, state: DeviceState, timeout_ms: int = 50) -> dict:
+        """轮询 NodeID 读取 L30 DeviceInFo，并把成功结果写回设备状态。"""
+        probed_ids = []
+        rx_total = 0
+        last_query_id = ""
+        for node_id in self._l30_probe_node_ids(state):
+            probed_ids.append(node_id)
+            read_id = self._build_l30_can_id(
+                state, 0, PCMD_CONFIG, SCMD_DEVICE_INFO, dst_id=node_id
+            )
+            last_query_id = f"0x{read_id:08X}"
+            self._send_can_frame(state, read_id, encode_empty_payload(), label="l30-info-read")
+            if self.mock:
+                info = {
+                    "product_id": 0x13,
+                    "product": "L30",
+                    "serial_no": state.dev + 1,
+                    "software": "Vmock",
+                    "hardware": "Vmock",
+                    "structure": "Vmock",
+                    "node_id": node_id,
+                    "l30_node_id": node_id,
+                    "hand_type": 0,
+                    "hand": "左手",
+                    "sensor_type": 2,
+                    "sensor": "华威科",
+                    "origin_code": 1,
+                    "origin": "北京自装",
+                }
+                state.info = {**state.info, **info}
+                return {
+                    "dev": state.dev,
+                    "query_id": last_query_id,
+                    "query_node_id": node_id,
+                    "reply_id": "",
+                    "matched": True,
+                    "info": info,
+                    "rx_count": 0,
+                    "probed_ids": probed_ids,
+                }
+            messages = self._receive_canfd(state, timeout_ms=timeout_ms)
+            rx_total += len(messages)
+            self._record_rx_frames(state, messages, label="l30-info-rx")
+            for can_id, data in messages:
+                rx_id = can_id & 0x1FFFFFFF
+                parent = (rx_id >> 21) & 0x0F
+                subcmd = (rx_id >> 13) & 0xFF
+                dst_id = (rx_id >> 8) & 0x1F
+                src_id = (rx_id >> 3) & 0x1F
+                if (
+                    parent == PCMD_CONFIG
+                    and subcmd == SCMD_DEVICE_INFO
+                    and dst_id == HOST_ID
+                    and src_id == node_id
+                ):
+                    info = parse_l30_device_info(data)
+                    if info:
+                        info = {**info, "l30_node_id": int(info.get("node_id", node_id))}
+                        state.info = {**state.info, **info}
+                    return {
+                        "dev": state.dev,
+                        "query_id": last_query_id,
+                        "query_node_id": node_id,
+                        "reply_id": f"0x{rx_id:08X}",
+                        "matched": True,
+                        "info": info,
+                        "rx_count": rx_total,
+                        "probed_ids": probed_ids,
+                    }
+        return {
+            "dev": state.dev,
+            "query_id": last_query_id,
+            "query_node_id": probed_ids[-1] if probed_ids else 0,
+            "reply_id": "",
+            "matched": False,
+            "info": {},
+            "rx_count": rx_total,
+            "probed_ids": probed_ids,
+        }
 
     def _send_can_frame(
         self,
@@ -877,6 +1019,10 @@ class CanBusController:
                     "dst_id": (rx_id >> 8) & 0x1F,
                     "src_id": (rx_id >> 3) & 0x1F,
                 }
+                if len(data) >= 3:
+                    status = parse_l30_status(data)
+                    parsed["status"] = f"0x{int(status):02X}" if status is not None else ""
+                    parsed["status_text"] = l30_status_text(status)
                 if label == "l30-info-rx":
                     info = parse_l30_device_info(data)
                     if info:
