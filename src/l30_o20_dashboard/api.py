@@ -43,19 +43,11 @@ def create_app() -> FastAPI:
     api.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
     @api.get("/", response_class=HTMLResponse)
-    def index() -> str:
-        """返回默认 L30 控制台。"""
-        return (TEMPLATE_DIR / "index.html").read_text(encoding="utf-8")
-
     @api.get("/l30", response_class=HTMLResponse)
-    def l30_page() -> str:
-        """返回 L30 控制台。"""
-        return (TEMPLATE_DIR / "index.html").read_text(encoding="utf-8")
-
     @api.get("/o20", response_class=HTMLResponse)
-    def o20_page() -> str:
-        """返回 O20 控制台。"""
-        return (TEMPLATE_DIR / "o20.html").read_text(encoding="utf-8")
+    def dashboard_page() -> str:
+        """返回统一 L30/O20 Dashboard。"""
+        return (TEMPLATE_DIR / "index.html").read_text(encoding="utf-8")
 
     @api.get("/favicon.ico", include_in_schema=False)
     def favicon() -> Response:
@@ -105,7 +97,7 @@ def create_app() -> FastAPI:
                     payload.devices,
                     payload.joints,
                     normalized=True,
-                    require_open=payload.require_open,
+                    require_open=True,
                 )
             }
         except (RuntimeError, ValueError, OSError) as exc:
@@ -122,7 +114,7 @@ def create_app() -> FastAPI:
                     device_ids=payload.device_ids,
                     device_id=payload.device_id,
                     frame_type=payload.frame_type,
-                    require_open=payload.require_open,
+                    require_open=True,
                 )
             }
         except (RuntimeError, ValueError, OSError) as exc:
@@ -139,7 +131,7 @@ def create_app() -> FastAPI:
                     device_ids=payload.device_ids,
                     device_id=payload.device_id,
                     frame_type=payload.frame_type,
-                    require_open=payload.require_open,
+                    require_open=True,
                 )
             }
         except (RuntimeError, ValueError, OSError) as exc:

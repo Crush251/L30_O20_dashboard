@@ -1,6 +1,6 @@
 # L30/O20 Dashboard
 
-L30/O20 Dashboard 是用于 L30 和 O20 灵巧手的本地 CANFD 控制台。后端使用 FastAPI 管理 USB-CANFD 设备，前端提供 L30 与 O20 两个独立页面，用于设备连接、使能、关节滑块、Dance 序列、RPS 和手势跟随。
+L30/O20 Dashboard 是用于 L30 和 O20 灵巧手的本地 CANFD 控制台。后端使用 FastAPI 管理 USB-CANFD 设备，前端提供统一的 `Dashboard(l30-O20)` 单页界面，用于设备连接、型号查询、使能、关节滑块、L30/O20 Dance 序列、RPS 和手势跟随。
 
 ## 项目结构
 
@@ -17,7 +17,7 @@ src/l30_o20_dashboard/
 ├── o20_protocol.py     # O20 CANFD 寄存器协议
 ├── joint_config.py     # L30 关节范围与归一化映射
 ├── static/             # 前端 JS/CSS 与 MediaPipe 离线资源
-├── templates/          # L30/O20 页面
+├── templates/          # Dashboard 页面
 └── dance/              # 内置 L30/O20 dance 文件
 ```
 
@@ -44,8 +44,8 @@ run_windows.bat --port 8098
 
 访问地址：
 
-- L30: `http://127.0.0.1:8098/l30`
-- O20: `http://127.0.0.1:8098/o20`
+- Dashboard: `http://127.0.0.1:8098/`
+- 兼容路径：`/l30`、`/o20` 也会进入同一个 Dashboard。
 
 无硬件调试：
 
@@ -55,12 +55,17 @@ L30_O20_DASHBOARD_MOCK=1 uv run l30-o20-dashboard
 
 ## 设备区分
 
-每个 USB-CANFD 适配器显示为 `DEV0`、`DEV1` 等。后端只打开前端勾选的设备，未勾选设备不会默认连接。连接一只 L30 和一只 O20 时：
+每个 USB-CANFD 适配器显示为 `DEV0`、`DEV1` 等。后端只打开前端勾选的设备，未勾选设备不会默认连接；发送、使能、Dance、Game、Follow 都要求设备已显式连接，不会在发送路径里自动打开或抢占设备。
 
-- 单进程：在 `/l30` 页面只勾选 L30 所在 DEV，在 `/o20` 页面只勾选 O20 所在 DEV。
-- 双进程：用不同端口启动两个实例，例如 `--port 8098` 和 `--port 8099`，每个实例只连接自己的 DEV，避免误选和总线占用。
+统一 Dashboard 中，每个设备卡片都有型号档案：
 
-L30 页面“设备查询”按 L30 新协议读取 DeviceInFo；O20 页面“设备查询”按 O20 协议读取型号、序列号、软件/硬件版本和左右手标志。
+- `L30查询` 按 L30 新协议读取 DeviceInFo，成功后该 DEV 标记为 L30。
+- `O20查询` 按 O20 协议轮询左右手节点，成功后该 DEV 标记为 O20，并记录该 DEV 对应的左右手节点。
+- 也可以在设备卡片中手动指定 `L30` / `O20`，O20 的左右手节点按 DEV 单独配置。
+
+统一滑块发送时，L30 接收 J1-J17；O20 只接收 J1-J16，J17 会被过滤。RPS 和 Follow 会同时分发给已勾选、已连接且型号匹配的 L30/O20 设备。Dance 区域分为 L30 Dance 和 O20 Dance，只会发送到对应型号的已勾选设备。
+
+多实例运行时，用不同端口启动，例如 `--port 8098` 和 `--port 8099`。如果某个 CANFD 已被另一个进程打开，新实例连接该 DEV 应返回打开失败，不影响原先已打开的程序。
 
 ## Dance 文件
 

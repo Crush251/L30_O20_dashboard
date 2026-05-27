@@ -3,66 +3,104 @@
     <head>
         <meta charset="utf-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1" />
-        <title>L30 控制台</title>
-        <link rel="stylesheet" href="/static/app.css?v=17" />
+        <title>Dashboard(l30-O20)</title>
+        <link rel="stylesheet" href="/static/app.css?v=18" />
         <link rel="stylesheet" href="/static/game.css?v=2" />
         <script src="/static/vendor/mediapipe/camera_utils/camera_utils.js" defer></script>
         <script src="/static/vendor/mediapipe/drawing_utils/drawing_utils.js" defer></script>
         <script src="/static/vendor/mediapipe/hands/hands.js" defer></script>
         <script src="/static/gesture.js?v=2" defer></script>
-        <script src="/static/app_config.js?v=4" defer></script>
-        <script src="/static/follow.js?v=6" defer></script>
-        <script src="/static/app.js?v=24" defer></script>
+        <script src="/static/app_config.js?v=5" defer></script>
+        <script src="/static/o20_config.js?v=6" defer></script>
+        <script src="/static/follow.js?v=7" defer></script>
+        <script src="/static/dashboard.js?v=1" defer></script>
     </head>
     <body>
-        <main class="shell">
-            <header class="topbar">
+        <main class="shell dashboard-shell">
+            <header class="topbar dashboard-topbar">
                 <div class="brand-block">
-                    <div class="title-row">
-                        <h1>L30 控制台</h1>
-                        <nav class="product-nav" aria-label="产品控制台">
-                            <a class="tool-button active" href="/l30">L30</a>
-                            <a class="tool-button" href="/o20">O20</a>
-                        </nav>
-                    </div>
+                    <h1>Dashboard(l30-O20)</h1>
                 </div>
                 <div class="status-pill" id="runtimeStatus">初始化</div>
             </header>
 
-            <section class="workbench">
+            <section class="workbench dashboard-workbench">
                 <aside class="panel devices-panel">
                     <div class="panel-head">
                         <h2>设备</h2>
                         <button class="tool-button" id="scanBtn" type="button">扫描</button>
                     </div>
                     <div class="device-list" id="deviceList"></div>
-                    <div class="button-row">
+                    <div class="button-row device-actions">
                         <button id="openBtn" type="button">连接所选</button>
-                        <button class="tool-button" id="l30InfoBtn" type="button">设备查询</button>
-                        <button id="enableBtn" type="button">使能</button>
-                        <button id="disableBtn" type="button">失能</button>
+                        <button class="tool-button" id="l30InfoBtn" type="button">L30查询</button>
+                        <button class="tool-button" id="o20InfoBtn" type="button">O20查询</button>
+                        <button class="tool-button" id="enableBtn" type="button">L30使能</button>
+                        <button class="tool-button" id="disableBtn" type="button">L30失能</button>
                     </div>
-                    <div class="embedded-dance">
-                        <div class="panel-head">
-                            <h2>Dance</h2>
-                            <div class="range-tools">
-                                <button class="tool-button" id="refreshDanceBtn" type="button">刷新</button>
-                                <button id="runDanceBtn" type="button">执行</button>
-                                <button class="tool-button" id="stopDanceBtn" type="button" disabled>停止</button>
+                    <div class="o20-inline-tools">
+                        <label class="compact-field">
+                            <span>FrameType</span>
+                            <select id="o20FrameType">
+                                <option value="4" selected>0x04</option>
+                                <option value="12">0x0C</option>
+                            </select>
+                        </label>
+                        <label class="compact-field">
+                            <span>O20速度%</span>
+                            <input id="o20Velocity" type="number" min="0" max="100" step="1" value="50" />
+                        </label>
+                        <button class="tool-button" id="o20VelocityBtn" type="button">写速度</button>
+                        <button class="tool-button" id="o20ErrorBtn" type="button">查错误</button>
+                        <button class="tool-button" id="o20ClearErrorBtn" type="button">清错误</button>
+                    </div>
+
+                    <div class="embedded-dance dual-dance">
+                        <div class="dance-block" data-product="l30">
+                            <div class="panel-head compact-head">
+                                <h2>L30 Dance</h2>
+                                <div class="range-tools">
+                                    <button class="tool-button" id="refreshL30DanceBtn" type="button">刷新</button>
+                                    <button id="runL30DanceBtn" type="button">执行</button>
+                                    <button class="tool-button" id="stopL30DanceBtn" type="button" disabled>停止</button>
+                                </div>
                             </div>
+                            <div class="dance-file-list" id="l30DanceFileList"></div>
+                            <div class="dance-controls">
+                                <label>
+                                    <span>循环次数</span>
+                                    <input id="l30DanceLoopCount" type="number" min="0" step="1" value="0" />
+                                </label>
+                                <label>
+                                    <span>发送间隔 ms</span>
+                                    <input id="l30DanceIntervalMs" type="number" min="0" step="1" value="30" />
+                                </label>
+                            </div>
+                            <div class="dance-status" id="l30DanceStatus">未执行</div>
                         </div>
-                        <div class="dance-file-list" id="danceFileList"></div>
-                        <div class="dance-controls">
-                            <label>
-                                <span>循环次数</span>
-                                <input id="danceLoopCount" type="number" min="0" step="1" value="0" />
-                            </label>
-                            <label>
-                                <span>发送间隔 ms</span>
-                                <input id="danceIntervalMs" type="number" min="0" step="1" value="30" />
-                            </label>
+
+                        <div class="dance-block" data-product="o20">
+                            <div class="panel-head compact-head">
+                                <h2>O20 Dance</h2>
+                                <div class="range-tools">
+                                    <button class="tool-button" id="refreshO20DanceBtn" type="button">刷新</button>
+                                    <button id="runO20DanceBtn" type="button">执行</button>
+                                    <button class="tool-button" id="stopO20DanceBtn" type="button" disabled>停止</button>
+                                </div>
+                            </div>
+                            <div class="dance-file-list" id="o20DanceFileList"></div>
+                            <div class="dance-controls">
+                                <label>
+                                    <span>循环次数</span>
+                                    <input id="o20DanceLoopCount" type="number" min="0" step="1" value="0" />
+                                </label>
+                                <label>
+                                    <span>发送间隔 ms</span>
+                                    <input id="o20DanceIntervalMs" type="number" min="0" step="1" value="30" />
+                                </label>
+                            </div>
+                            <div class="dance-status" id="o20DanceStatus">未执行</div>
                         </div>
-                        <div class="dance-status" id="danceStatus">未执行</div>
                     </div>
                 </aside>
 
@@ -84,11 +122,12 @@
                             </div>
                         </div>
                         <div class="pose-list" id="poseList"></div>
-                        <div class="pose-actions">
+                        <div class="pose-actions dashboard-pose-actions">
                             <button class="tool-button" id="poseRunBtn" type="button">执行</button>
                             <button class="tool-button" id="poseDeleteBtn" type="button">删除</button>
                             <input id="poseFileName" type="text" placeholder="文件名" />
-                            <button id="poseSaveBtn" type="button">保存</button>
+                            <button class="tool-button" id="poseSaveL30Btn" type="button">保存L30</button>
+                            <button id="poseSaveO20Btn" type="button">保存O20</button>
                         </div>
                         <div class="pose-status" id="poseStatus">未记录</div>
                     </div>
@@ -97,7 +136,7 @@
                 <section class="panel game-panel">
                     <div class="panel-head">
                         <h2>Game</h2>
-                        <div class="range-tools">
+                        <div class="range-tools game-tools">
                             <button class="tool-button active" id="rpsModeBtn" type="button">RPS</button>
                             <button class="tool-button" id="followModeBtn" type="button">Follow</button>
                             <button id="gameBtn" type="button">启动摄像头</button>

@@ -273,7 +273,7 @@ class CanBusController:
         label = "l30-enable" if enabled else "l30-disable"
         data = encode_empty_payload()
         with self.lock:
-            for state in self._selected_open_devices(dev_ids):
+            for state in self._selected_existing_open_devices(dev_ids):
                 ack = self._send_l30_command_with_ack(state, PCMD_JOINT_CTRL, scmd, data, label)
                 if not ack.get("matched"):
                     info_result = self._discover_l30_device_info(state, timeout_ms=50)
@@ -598,7 +598,7 @@ class CanBusController:
         for step in sequence:
             positions = step.get("joints", [0] * JOINT_COUNT)
             hold_ms = int(step.get("hold_ms", 180))
-            sent = self.set_joints(dev_ids, positions)
+            sent = self.set_joints(dev_ids, positions, require_open=True)
             time.sleep(max(0, hold_ms) / 1000)
         return sent
 
@@ -635,6 +635,8 @@ class CanBusController:
 
     def explain_error(self, message: str) -> str:
         """把底层 DLL/so 错误转换成更适合界面展示的中文提示。"""
+        if "is not opened" in message:
+            return f"{message}. 请先在设备区勾选并连接该 CANFD 设备，发送路径不会自动打开设备。"
         if "CAN_OpenDevice" in message and "failed: -1" in message:
             command = ".\\run_windows.bat" if self.system == "windows" else "./run_sudo.sh"
             return (
@@ -1088,13 +1090,8 @@ class CanBusController:
         return ""
 
     def _selected_open_devices(self, dev_ids: Iterable[int]) -> list[DeviceState]:
-        states = []
-        for dev in sorted({int(x) for x in dev_ids}):
-            state = self.devices.setdefault(dev, DeviceState(dev=dev))
-            if not state.opened:
-                self._open_one(state)
-            states.append(state)
-        return states
+        """兼容旧调用名，但不再隐式打开设备。"""
+        return self._selected_existing_open_devices(dev_ids)
 
     def _selected_existing_open_devices(self, dev_ids: Iterable[int]) -> list[DeviceState]:
         """只返回已经打开的设备，禁止调用方触发隐式 open。"""

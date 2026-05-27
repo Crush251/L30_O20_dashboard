@@ -1095,3 +1095,174 @@ h2 {
         grid-template-columns: 1fr;
     }
 }
+
+
+/* Unified L30/O20 Dashboard */
+.dashboard-shell {
+    width: min(1500px, calc(100vw - 40px));
+}
+
+.dashboard-topbar h1 {
+    white-space: nowrap;
+}
+
+.dashboard-workbench {
+    grid-template-columns: minmax(280px, 0.9fr) minmax(560px, 1.65fr) minmax(320px, 1fr);
+}
+
+.dashboard-workbench .devices-panel,
+.dashboard-workbench .joints-panel,
+.dashboard-workbench .game-panel {
+    min-height: 0;
+}
+
+.device-actions {
+    margin-top: 10px;
+}
+
+.device-actions button,
+.o20-inline-tools button,
+.game-tools button {
+    min-height: 32px;
+    padding: 0 10px;
+}
+
+.o20-inline-tools {
+    align-items: center;
+    border-top: 1px solid var(--line);
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 12px;
+    padding-top: 12px;
+}
+
+.o20-inline-tools .compact-field input {
+    width: 58px;
+}
+
+.dashboard-device {
+    align-items: start;
+    grid-template-columns: auto minmax(0, 1fr);
+}
+
+.device-body {
+    min-width: 0;
+}
+
+.device-name {
+    align-items: center;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+
+.device-badge {
+    background: #eef0ea;
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    color: var(--muted);
+    font-size: 11px;
+    font-weight: 800;
+    padding: 2px 7px;
+}
+
+.device-badge.enabled {
+    background: rgba(36, 107, 85, 0.12);
+    border-color: rgba(36, 107, 85, 0.28);
+    color: var(--green-dark);
+}
+
+.device-controls {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 6px;
+}
+
+.device-controls .compact-field select {
+    height: 30px;
+    width: 96px;
+}
+
+.device-controls .o20-hand-field select {
+    width: 112px;
+}
+
+.dashboard-device.model-l30 {
+    border-left: 3px solid var(--green);
+}
+
+.dashboard-device.model-o20 {
+    border-left: 3px solid var(--amber);
+}
+
+.dual-dance {
+    display: grid;
+    gap: 14px;
+}
+
+.dance-block + .dance-block {
+    border-top: 1px solid var(--line);
+    padding-top: 12px;
+}
+
+.compact-head {
+    align-items: center;
+}
+
+.compact-head h2 {
+    white-space: nowrap;
+}
+
+.compact-head .range-tools {
+    justify-content: flex-end;
+}
+
+.compact-head button {
+    min-height: 30px;
+    padding: 0 9px;
+}
+
+.dashboard-pose-actions {
+    grid-template-columns: auto auto minmax(100px, 1fr) auto auto;
+}
+
+.l30-only-joint label::after {
+    color: var(--amber);
+    content: " L30";
+    font-size: 9px;
+}
+
+@media (max-width: 1260px) {
+    .dashboard-workbench {
+        grid-template-columns: minmax(270px, 0.9fr) minmax(470px, 1.35fr);
+    }
+
+    .dashboard-workbench .game-panel {
+        grid-column: 1 / -1;
+        grid-row: 2;
+    }
+
+    .dashboard-workbench .log-panel {
+        grid-row: 3;
+    }
+}
+
+@media (max-width: 820px) {
+    .dashboard-shell {
+        width: min(100vw - 24px, 760px);
+    }
+
+    .dashboard-topbar h1 {
+        white-space: normal;
+    }
+
+    .dashboard-pose-actions {
+        grid-template-columns: 1fr 1fr;
+    }
+
+    .dashboard-pose-actions input {
+        grid-column: 1 / -1;
+    }
+}
