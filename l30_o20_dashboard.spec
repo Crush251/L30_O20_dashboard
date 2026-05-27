@@ -1,5 +1,6 @@
 # -*- mode: python ; coding: utf-8 -*-
 
+import os
 from pathlib import Path
 
 from PyInstaller.utils.hooks import collect_submodules
@@ -19,7 +20,7 @@ datas = []
 datas += add_tree("src/l30_o20_dashboard/static", "l30_o20_dashboard/static")
 datas += add_tree("src/l30_o20_dashboard/templates", "l30_o20_dashboard/templates")
 datas += add_tree("src/l30_o20_dashboard/dance", "l30_o20_dashboard/dance")
-datas += add_tree("libcanbus/libcanbus.so", "libcanbus")
+datas += add_tree(os.environ.get("L30_CANBUS_BUNDLE_SO", "libcanbus/libcanbus.so"), "libcanbus")
 datas += add_tree("libcanbus/HCanbus.dll", "libcanbus")
 
 hiddenimports = collect_submodules("uvicorn")

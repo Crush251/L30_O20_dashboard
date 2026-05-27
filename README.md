@@ -93,11 +93,14 @@ L30 控制按 `src/L30灵巧手CANFD扩展帧通讯协议.md` 实现：
 
 ## 打包
 
-Linux：
+Linux 默认按当前机器架构打包，也可以显式指定目标：
 
 ```bash
-./build_linux.sh
+./build_linux.sh amd64
+./build_linux.sh arm64
 ```
+
+amd64 版本使用 `libcanbus/libcanbus.so`，arm64 版本使用 `libcanbus/libcanbus_arm64.so`。PyInstaller 不能交叉编译 Python 可执行文件，所以 amd64 版本需要在 x86_64 环境构建，arm64 版本需要在 ARM64/aarch64 环境构建。
 
 Windows：
 
@@ -108,6 +111,7 @@ build_windows.bat
 输出：
 
 ```text
-dist/l30-o20-dashboard
+dist/l30-o20-dashboard-amd64
+dist/l30-o20-dashboard-arm64
 dist/l30-o20-dashboard.exe
 ```

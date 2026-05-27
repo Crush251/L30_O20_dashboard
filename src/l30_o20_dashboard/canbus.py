@@ -137,12 +137,18 @@ class CanBusController:
             else:
                 self.lib = self._load_library()
 
+    def _default_linux_library_name(self) -> str:
+        machine = platform.machine().lower()
+        if machine in {"aarch64", "arm64"}:
+            return "libcanbus_arm64.so"
+        return "libcanbus.so"
+
     def _default_library_path(self) -> Path:
         if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
             bundled_root = Path(sys._MEIPASS) / "libcanbus"
             if self.system == "windows":
                 return bundled_root / "HCanbus.dll"
-            return bundled_root / "libcanbus.so"
+            return bundled_root / self._default_linux_library_name()
 
         package_root = Path(__file__).resolve().parent
         project_root = package_root.parents[1]
