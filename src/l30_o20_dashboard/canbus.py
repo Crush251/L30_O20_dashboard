@@ -140,11 +140,22 @@ class CanBusController:
             else:
                 self.lib = self._load_library()
 
+    def _linux_library_names(self) -> list[str]:
+        """Return Linux CAN library names in the order preferred for this CPU."""
+        machine = platform.machine().lower()
+        if machine in {"aarch64", "arm64"}:
+            return ["libcanbus_arm64.so", "libcanbus.so"]
+        return ["libcanbus.so", "libcanbus_arm64.so"]
+
     def _default_library_path(self) -> Path:
         if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
             bundled_root = Path(sys._MEIPASS) / "libcanbus"
             if self.system == "windows":
                 return bundled_root / "HCanbus.dll"
+            for name in self._linux_library_names():
+                candidate = bundled_root / name
+                if candidate.exists():
+                    return candidate
             return bundled_root / "libcanbus.so"
 
         package_root = Path(__file__).resolve().parent
@@ -167,8 +178,9 @@ class CanBusController:
             return project_root / "HCanbus.dll"
 
         candidates = [
-            project_root / "libcanbus" / "libcanbus.so",
-            workspace_root / "libcanbus" / "libcanbus.so",
+            root / "libcanbus" / name
+            for root in (project_root, workspace_root)
+            for name in self._linux_library_names()
         ]
         for candidate in candidates:
             if candidate.exists():
