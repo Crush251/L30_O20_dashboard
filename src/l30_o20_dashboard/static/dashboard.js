@@ -6,6 +6,12 @@
     const RECOGNITION_INTERVAL_MS = L30.RECOGNITION_INTERVAL_MS || 30;
     const FOLLOW_SEND_INTERVAL_MS = L30.FOLLOW_SEND_INTERVAL_MS || 30;
     const FOLLOW_CHANGE_THRESHOLD_PERCENT = L30.FOLLOW_CHANGE_THRESHOLD_PERCENT || 2;
+    const CAMERA_RESOLUTIONS = {
+        "240p": { width: 320, height: 240 },
+        "480p": { width: 640, height: 480 },
+        "720p": { width: 1280, height: 720 },
+        "1080p": { width: 1920, height: 1080 }
+    };
 
     const state = {
         devices: [],
@@ -22,6 +28,7 @@
         },
         cameras: [],
         selectedCameraId: "",
+        cameraResolution: "720p",
         camera: null,
         frameRequest: 0,
         hands: null,
@@ -46,14 +53,14 @@
     function bindElements() {
         for (const id of [
             "runtimeStatus", "deviceList", "scanBtn", "openBtn", "forceOpenBtn", "deviceQueryBtn",
-            "enableBtn", "disableBtn", "o20FrameType", "o20Velocity", "o20VelocityBtn",
+            "enableBtn", "disableBtn", "o20Velocity", "o20VelocityBtn",
             "o20ErrorBtn", "o20ClearErrorBtn", "txLog", "sliders", "zeroBtn", "sendBtn",
             "poseRecordBtn", "poseOverwriteBtn", "poseRunBtn", "poseDeleteBtn", "poseSaveL30Btn",
             "poseSaveO20Btn", "poseList", "poseFileName", "poseStatus", "refreshL30DanceBtn",
             "runL30DanceBtn", "stopL30DanceBtn", "l30DanceFileList", "l30DanceLoopCount",
             "l30DanceIntervalMs", "l30DanceStatus", "refreshO20DanceBtn", "runO20DanceBtn",
             "stopO20DanceBtn", "o20DanceFileList", "o20DanceLoopCount", "o20DanceIntervalMs",
-            "o20DanceStatus", "rpsModeBtn", "followModeBtn", "gameBtn", "stopGameBtn",
+            "o20DanceStatus", "rpsModeBtn", "followModeBtn", "cameraResolution", "gameBtn", "stopGameBtn",
             "cameraList", "inputVideo", "outputCanvas", "gestureName", "gestureConfidence",
             "debugLines", "gameResult"
         ]) {
@@ -140,10 +147,6 @@
         return Object.fromEntries(devices.map((dev) => [String(dev), Number(profileFor(dev).o20DeviceId) || 1]));
     }
 
-    function selectedFrameType() {
-        return Number(els.o20FrameType?.value) === 12 ? 12 : 4;
-    }
-
     function handName(deviceId) {
         return Number(deviceId) === 2 ? "左手" : "右手";
     }
@@ -153,9 +156,13 @@
     }
 
     function l30DeviceInfoText(info = {}) {
-        if (info.product || info.serial_no || info.hand) {
-            const product = info.product || "L30";
-            const serial = info.serial_no ? `SN ${info.serial_no}` : "SN -";
+        if (info.product || info.product_code || info.serial_no || info.hand) {
+            const product = info.product_code || info.product || "L30";
+            const serial = info.serial_label
+                ? `序列号 ${info.serial_label}`
+                : info.serial_no
+                  ? `SN ${info.serial_no}`
+                  : "SN -";
             const software = info.software || "-";
             const hardware = info.hardware || "-";
             const hand = info.hand || "左右手未知";
@@ -358,8 +365,9 @@
             const row = document.createElement("div");
             row.className = `joint-row ${index === 16 ? "l30-only-joint" : ""}`;
             const label = `J${String(index + 1).padStart(2, "0")}`;
+            const jointName = L30.JOINT_LABELS[index] || label;
             row.innerHTML = `
-                <label title="${escapeHtml(L30.JOINT_LABELS[index] || label)}">${label}</label>
+                <label title="${escapeHtml(label + " " + jointName)}"><span>${label}</span><strong>${escapeHtml(jointName)}</strong></label>
                 <input type="range" min="0" max="100" step="1" value="${value}" data-index="${index}">
                 <input type="number" min="0" max="100" step="1" value="${value}" data-index="${index}">
             `;
@@ -429,10 +437,7 @@
         const devices = selectedDevices();
         if (!devices.length) return showError(new Error("请先勾选设备"));
         try {
-            const result = await api("/api/devices/query", {
-                devices,
-                frame_type: selectedFrameType()
-            });
+            const result = await api("/api/devices/query", { devices });
             const lines = [];
             for (const profile of result.profiles || []) {
                 if (profile.model === "o20") {
@@ -476,7 +481,6 @@
                 devices,
                 velocity: rawVelocity,
                 device_ids: selectedO20DeviceIdMap(devices),
-                frame_type: selectedFrameType(),
                 require_open: true
             });
             setResult(`O20 速度已发送：${percent}% -> ${rawVelocity}`);
@@ -493,8 +497,7 @@
         try {
             const result = await api("/api/o20/error", {
                 devices,
-                device_ids: selectedO20DeviceIdMap(devices),
-                frame_type: selectedFrameType()
+                device_ids: selectedO20DeviceIdMap(devices)
             });
             const lines = (result.results || []).map((item) => {
                 const label = `DEV${item.dev}/${handName(item.device_id)}`;
@@ -513,8 +516,7 @@
         try {
             await api("/api/o20/error/clear", {
                 devices,
-                device_ids: selectedO20DeviceIdMap(devices),
-                frame_type: selectedFrameType()
+                device_ids: selectedO20DeviceIdMap(devices)
             });
             setResult("O20 清除错误指令已发送");
             await delay(40);
@@ -541,7 +543,6 @@
                 devices: o20Devices,
                 joints: joints.slice(0, O20.O20_JOINT_COUNT),
                 device_ids: selectedO20DeviceIdMap(o20Devices),
-                frame_type: selectedFrameType(),
                 require_open: true
             }));
         }
@@ -689,7 +690,9 @@
         elements.stop.disabled = !bucket.running;
         const file = status.file || bucket.selected || "未选择";
         const sent = Number(status.sent || 0);
-        elements.status.textContent = bucket.running ? `${file} 执行中 · 已发送 ${sent} 条` : status.message || "未执行";
+        const drained = Number(status.rx_drained || 0);
+        const drainText = drained ? ` · RX清理 ${drained}` : "";
+        elements.status.textContent = bucket.running ? `${file} 执行中 · 已发送 ${sent} 条${drainText}` : status.message || "未执行";
         if (bucket.running && !bucket.timer) {
             bucket.timer = window.setInterval(() => void loadDance(product), 500);
         }
@@ -722,7 +725,6 @@
             };
             if (product === "o20") {
                 payload.device_ids = selectedO20DeviceIdMap(devices);
-                payload.frame_type = selectedFrameType();
             }
             const endpoint = product === "o20" ? "/api/o20/dance/run" : "/api/dance/run";
             renderDance(product, await api(endpoint, payload));
@@ -963,7 +965,6 @@
                 devices: o20Ready,
                 joints: o20Joints,
                 device_ids: selectedO20DeviceIdMap(o20Ready),
-                frame_type: selectedFrameType(),
                 require_open: true
             }).then(() => { state.lastFollowSent.o20 = o20Joints.slice(); return "O20"; }));
         }
@@ -1042,8 +1043,7 @@
                     tasks.push(api("/api/o20/game", {
                         devices: o20Devices,
                         device_ids: selectedO20DeviceIdMap(o20Devices),
-                        gesture: responseGesture,
-                        frame_type: selectedFrameType()
+                        gesture: responseGesture
                     }).then(() => "O20"));
                 }
                 if (!tasks.length) {
@@ -1077,6 +1077,18 @@
         els.gestureConfidence.textContent = mode === "follow" ? "待启动" : "0%";
         els.debugLines.textContent = "";
         setResult(mode === "follow" ? "Follow 模式待启动" : "等待手势");
+    }
+
+    function selectedCameraConstraints() {
+        const preset = CAMERA_RESOLUTIONS[state.cameraResolution] || CAMERA_RESOLUTIONS["720p"];
+        const constraints = {
+            width: { ideal: preset.width },
+            height: { ideal: preset.height }
+        };
+        if (state.selectedCameraId) {
+            constraints.deviceId = { exact: state.selectedCameraId };
+        }
+        return constraints;
     }
 
     async function startGame() {
@@ -1116,9 +1128,10 @@
         state.lastRecognitionAt = 0;
         state.lastUiUpdateAt = 0;
         state.recognitionBusy = false;
-        const videoConstraints = { width: { ideal: 960 }, height: { ideal: 720 } };
-        if (state.selectedCameraId) videoConstraints.deviceId = { exact: state.selectedCameraId };
-        const stream = await navigator.mediaDevices.getUserMedia({ video: videoConstraints, audio: false });
+        const stream = await navigator.mediaDevices.getUserMedia({
+            video: selectedCameraConstraints(),
+            audio: false
+        });
         els.inputVideo.srcObject = stream;
         await els.inputVideo.play();
         const deviceId = stream.getVideoTracks()[0]?.getSettings?.().deviceId;
@@ -1209,6 +1222,12 @@
         els.rpsModeBtn.addEventListener("click", () => setGameMode("rps"));
         els.followModeBtn.addEventListener("click", () => setGameMode("follow"));
         els.gameBtn.addEventListener("click", startGame);
+        els.cameraResolution.addEventListener("change", async (event) => {
+            state.cameraResolution = event.target.value || "720p";
+            if (state.gameRunning && state.selectedCameraId) {
+                await restartCamera();
+            }
+        });
         els.stopGameBtn.addEventListener("click", stopGame);
     }
 

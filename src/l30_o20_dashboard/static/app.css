@@ -332,8 +332,24 @@ a.tool-button {
 }
 
 .joint-row label {
+    align-items: baseline;
     color: var(--steel);
+    display: flex;
+    gap: 6px;
+    min-width: 0;
     font-weight: 800;
+}
+
+.joint-row label span {
+    flex: 0 0 auto;
+}
+
+.joint-row label strong {
+    font-weight: 700;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
 .joint-row input[type="range"] {
@@ -813,7 +829,7 @@ h2 {
     border: 1px solid transparent;
     border-radius: 7px;
     gap: 6px;
-    grid-template-columns: 34px minmax(96px, 1fr) 48px;
+    grid-template-columns: minmax(118px, 0.65fr) minmax(96px, 1fr) 48px;
     min-height: 31px;
     padding: 3px 7px;
 }
@@ -823,7 +839,11 @@ h2 {
 }
 
 .joint-row label {
+    align-items: baseline;
     color: var(--muted);
+    display: flex;
+    gap: 6px;
+    min-width: 0;
     font-size: 11px;
     font-weight: 800;
 }
@@ -1084,7 +1104,7 @@ h2 {
     }
 
     .joint-row {
-        grid-template-columns: 40px minmax(96px, 1fr) 68px;
+        grid-template-columns: minmax(118px, 0.7fr) minmax(96px, 1fr) 68px;
     }
 
     .joints-panel .sliders {
@@ -1265,4 +1285,14 @@ h2 {
     .dashboard-pose-actions input {
         grid-column: 1 / -1;
     }
+}
+
+
+.camera-resolution-field select {
+    height: 32px;
+    width: 84px;
+}
+
+.camera-resolution-field span {
+    white-space: nowrap;
 }

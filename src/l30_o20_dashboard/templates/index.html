@@ -4,16 +4,16 @@
         <meta charset="utf-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1" />
         <title>Dashboard(l30-O20)</title>
-        <link rel="stylesheet" href="/static/app.css?v=18" />
+        <link rel="stylesheet" href="/static/app.css?v=19" />
         <link rel="stylesheet" href="/static/game.css?v=2" />
         <script src="/static/vendor/mediapipe/camera_utils/camera_utils.js" defer></script>
         <script src="/static/vendor/mediapipe/drawing_utils/drawing_utils.js" defer></script>
         <script src="/static/vendor/mediapipe/hands/hands.js" defer></script>
         <script src="/static/gesture.js?v=2" defer></script>
-        <script src="/static/app_config.js?v=5" defer></script>
+        <script src="/static/app_config.js?v=7" defer></script>
         <script src="/static/o20_config.js?v=6" defer></script>
         <script src="/static/follow.js?v=7" defer></script>
-        <script src="/static/dashboard.js?v=2" defer></script>
+        <script src="/static/dashboard.js?v=4" defer></script>
     </head>
     <body>
         <main class="shell dashboard-shell">
@@ -39,13 +39,6 @@
                         <button class="tool-button" id="disableBtn" type="button">L30失能</button>
                     </div>
                     <div class="o20-inline-tools">
-                        <label class="compact-field">
-                            <span>FrameType</span>
-                            <select id="o20FrameType">
-                                <option value="4" selected>0x04</option>
-                                <option value="12">0x0C</option>
-                            </select>
-                        </label>
                         <label class="compact-field">
                             <span>O20速度%</span>
                             <input id="o20Velocity" type="number" min="0" max="100" step="1" value="50" />
@@ -139,6 +132,15 @@
                         <div class="range-tools game-tools">
                             <button class="tool-button active" id="rpsModeBtn" type="button">RPS</button>
                             <button class="tool-button" id="followModeBtn" type="button">Follow</button>
+                            <label class="compact-field camera-resolution-field">
+                                <span>像素</span>
+                                <select id="cameraResolution">
+                                    <option value="240p">240p</option>
+                                    <option value="480p">480p</option>
+                                    <option value="720p" selected>720p</option>
+                                    <option value="1080p">1080p</option>
+                                </select>
+                            </label>
                             <button id="gameBtn" type="button">启动摄像头</button>
                             <button class="tool-button" id="stopGameBtn" type="button" disabled>关闭摄像头</button>
                         </div>
