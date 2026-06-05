@@ -13,7 +13,8 @@
         <script src="/static/app_config.js?v=7" defer></script>
         <script src="/static/o20_config.js?v=6" defer></script>
         <script src="/static/follow.js?v=7" defer></script>
-        <script src="/static/dashboard.js?v=4" defer></script>
+        <script src="/static/dashboard.js?v=5" defer></script>
+        <script src="/static/sensor_monitor.js?v=1" defer></script>
     </head>
     <body>
         <main class="shell dashboard-shell">
@@ -21,10 +22,14 @@
                 <div class="brand-block">
                     <h1>Dashboard(l30-O20)</h1>
                 </div>
+                <nav class="view-switch" aria-label="页面切换">
+                    <button class="view-switch-button active" data-view-target="dashboardView" type="button">控制台</button>
+                    <button class="view-switch-button" data-view-target="sensorView" type="button">传感器</button>
+                </nav>
                 <div class="status-pill" id="runtimeStatus">初始化</div>
             </header>
 
-            <section class="workbench dashboard-workbench">
+            <section class="workbench dashboard-workbench view-panel" id="dashboardView">
                 <aside class="panel devices-panel">
                     <div class="panel-head">
                         <h2>设备</h2>
@@ -163,6 +168,36 @@
                         <h2>日志</h2>
                     </div>
                     <pre class="tx-log" id="txLog"></pre>
+                </section>
+            </section>
+
+
+            <section class="sensor-monitor view-panel" id="sensorView" hidden>
+                <aside class="panel sensor-control-panel">
+                    <div class="panel-head">
+                        <h2>传感器设备</h2>
+                        <button class="tool-button" id="sensorRefreshBtn" type="button">刷新</button>
+                    </div>
+                    <div class="sensor-device-list" id="sensorDeviceList"></div>
+                    <div class="sensor-actions">
+                        <button id="sensorReadOnceBtn" type="button">读取一次</button>
+                        <button class="tool-button" id="sensorStartBtn" type="button">开始监控</button>
+                        <button class="tool-button" id="sensorStopBtn" type="button" disabled>停止</button>
+                        <label class="compact-field">
+                            <span>间隔</span>
+                            <select id="sensorIntervalMs">
+                                <option value="120">120ms</option>
+                                <option value="200" selected>200ms</option>
+                                <option value="500">500ms</option>
+                                <option value="1000">1000ms</option>
+                            </select>
+                        </label>
+                    </div>
+                    <div class="sensor-status" id="sensorStatus">选择已连接设备后读取</div>
+                </aside>
+
+                <section class="sensor-card-grid" id="sensorCards">
+                    <div class="sensor-empty">暂无传感器数据</div>
                 </section>
             </section>
         </main>

@@ -29,6 +29,7 @@ from .schemas import (
     O20JointRequest,
     O20VelocityRequest,
     SequenceSaveRequest,
+    SensorReadRequest,
 )
 from .sequences import GESTURE_SEQUENCES, serialize_sequence
 
@@ -46,6 +47,7 @@ def create_app() -> FastAPI:
     @api.get("/", response_class=HTMLResponse)
     @api.get("/l30", response_class=HTMLResponse)
     @api.get("/o20", response_class=HTMLResponse)
+    @api.get("/sensor", response_class=HTMLResponse)
     def dashboard_page() -> str:
         """返回统一 L30/O20 Dashboard。"""
         return (TEMPLATE_DIR / "index.html").read_text(encoding="utf-8")
@@ -249,6 +251,19 @@ def create_app() -> FastAPI:
                     device_ids=payload.device_ids,
                     device_id=payload.device_id,
                     frame_type=O20_FRAME_TYPE,
+                )
+            }
+        except (RuntimeError, ValueError, OSError) as exc:
+            raise HTTPException(status_code=409, detail=controller.explain_error(str(exc))) from exc
+
+    @api.post("/api/sensors/read")
+    def read_sensors(payload: SensorReadRequest) -> dict:
+        """主动读取已连接 L30/O20 设备的触觉传感器点阵。"""
+        try:
+            return {
+                "devices": controller.query_tactile_sensors(
+                    payload.devices,
+                    profiles=payload.profiles,
                 )
             }
         except (RuntimeError, ValueError, OSError) as exc:

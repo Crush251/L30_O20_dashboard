@@ -1296,3 +1296,356 @@ h2 {
 .camera-resolution-field span {
     white-space: nowrap;
 }
+
+
+/* Sensor monitor view */
+.view-switch {
+    align-items: center;
+    background: rgba(230, 232, 226, 0.9);
+    border: 1px solid rgba(39, 52, 58, 0.14);
+    border-radius: 999px;
+    box-shadow: 0 10px 24px rgba(39, 52, 58, 0.08);
+    display: flex;
+    gap: 4px;
+    padding: 4px;
+}
+
+.view-switch-button {
+    background: transparent;
+    border: 0;
+    border-radius: 999px;
+    color: var(--muted);
+    min-height: 32px;
+    padding: 0 14px;
+}
+
+.view-switch-button.active {
+    background: var(--surface);
+    box-shadow: 0 6px 16px rgba(39, 52, 58, 0.12);
+    color: var(--steel);
+}
+
+.view-panel[hidden] {
+    display: none !important;
+}
+
+.sensor-monitor {
+    display: grid;
+    gap: 16px;
+    grid-template-columns: minmax(280px, 0.78fr) minmax(680px, 2.4fr);
+}
+
+.sensor-control-panel {
+    align-self: start;
+    position: sticky;
+    top: 18px;
+}
+
+.sensor-device-list {
+    display: grid;
+    gap: 10px;
+    margin-bottom: 12px;
+}
+
+.sensor-device-item {
+    align-items: start;
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    display: grid;
+    gap: 10px;
+    grid-template-columns: auto minmax(0, 1fr);
+    padding: 12px;
+}
+
+.sensor-device-item.model-l30 {
+    border-left: 3px solid var(--green);
+}
+
+.sensor-device-item.model-o20 {
+    border-left: 3px solid var(--amber);
+}
+
+.sensor-device-check {
+    height: 18px;
+    margin-top: 3px;
+    width: 18px;
+}
+
+.sensor-device-body {
+    min-width: 0;
+}
+
+.sensor-device-controls {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 8px;
+}
+
+.sensor-device-controls select,
+.sensor-node-field select {
+    width: 112px;
+}
+
+.sensor-actions {
+    border-top: 1px solid var(--line);
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 12px;
+    padding-top: 12px;
+}
+
+.sensor-actions button {
+    min-height: 34px;
+    padding: 0 12px;
+}
+
+.sensor-status {
+    background: rgba(39, 52, 58, 0.05);
+    border: 1px solid rgba(39, 52, 58, 0.08);
+    border-radius: 6px;
+    color: var(--muted);
+    font-size: 12px;
+    margin-top: 12px;
+    min-height: 34px;
+    padding: 9px 10px;
+}
+
+.sensor-card-grid {
+    align-content: start;
+    display: grid;
+    gap: 16px;
+    grid-template-columns: repeat(auto-fit, minmax(560px, 1fr));
+    min-width: 0;
+}
+
+.sensor-card {
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: rgba(255, 253, 246, 0.92);
+    box-shadow: var(--shadow);
+    min-width: 0;
+    overflow: hidden;
+    padding: 16px;
+}
+
+.sensor-card.model-l30 {
+    border-top: 4px solid var(--green);
+}
+
+.sensor-card.model-o20 {
+    border-top: 4px solid var(--amber);
+}
+
+.sensor-card-head {
+    align-items: start;
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 12px;
+}
+
+.sensor-card-head p {
+    color: var(--muted);
+    font-size: 13px;
+    margin: 4px 0 0;
+}
+
+.sensor-peak {
+    align-items: center;
+    background: rgba(182, 75, 56, 0.14);
+    border: 1px solid rgba(182, 75, 56, 0.28);
+    border-radius: 999px;
+    color: var(--red);
+    display: inline-flex;
+    font-size: 18px;
+    justify-content: center;
+    min-height: 44px;
+    min-width: 54px;
+    padding: 0 12px;
+}
+
+.sensor-hand-scene {
+    background:
+        linear-gradient(90deg, rgba(39, 52, 58, 0.04) 1px, transparent 1px),
+        linear-gradient(0deg, rgba(39, 52, 58, 0.04) 1px, transparent 1px),
+        rgba(244, 241, 232, 0.72);
+    background-size: 20px 20px;
+    border: 1px solid rgba(39, 52, 58, 0.09);
+    border-radius: 8px;
+    min-height: 560px;
+    overflow: hidden;
+    position: relative;
+}
+
+.sensor-palm-core {
+    align-items: center;
+    background: rgba(255, 253, 246, 0.72);
+    border: 1px solid rgba(39, 52, 58, 0.14);
+    border-radius: 46% 46% 28% 28%;
+    box-shadow: inset 0 0 0 10px rgba(39, 52, 58, 0.03);
+    color: rgba(39, 52, 58, 0.32);
+    display: flex;
+    font-size: 32px;
+    font-weight: 900;
+    height: 190px;
+    justify-content: center;
+    left: 39%;
+    letter-spacing: 0;
+    position: absolute;
+    top: 310px;
+    width: 170px;
+}
+
+.o20-hand .sensor-palm-core {
+    border-radius: 42% 48% 30% 28%;
+    height: 178px;
+    left: 40%;
+    width: 154px;
+}
+
+.sensor-finger {
+    background: rgba(255, 253, 246, 0.86);
+    border: 1px solid rgba(39, 52, 58, 0.13);
+    border-radius: 7px;
+    box-shadow: 0 12px 28px rgba(39, 52, 58, 0.1);
+    padding: 8px;
+    position: absolute;
+    width: clamp(96px, 16%, 122px);
+}
+
+.sensor-finger.offline {
+    opacity: 0.46;
+}
+
+.sensor-finger-thumb {
+    left: 8%;
+    top: 292px;
+    transform: rotate(-31deg);
+}
+
+.sensor-finger-index {
+    left: 28%;
+    top: 70px;
+    transform: rotate(-7deg);
+}
+
+.sensor-finger-middle {
+    left: 43%;
+    top: 42px;
+}
+
+.sensor-finger-ring {
+    left: 58%;
+    top: 74px;
+    transform: rotate(6deg);
+}
+
+.sensor-finger-pinky {
+    left: 73%;
+    top: 136px;
+    transform: rotate(15deg);
+}
+
+.o20-hand .sensor-finger-thumb {
+    left: 9%;
+    top: 286px;
+    transform: rotate(-27deg);
+}
+
+.o20-hand .sensor-finger-pinky {
+    top: 154px;
+    transform: rotate(18deg);
+}
+
+.sensor-finger-title {
+    align-items: center;
+    display: flex;
+    justify-content: space-between;
+    gap: 6px;
+    margin-bottom: 6px;
+}
+
+.sensor-finger-title strong {
+    font-size: 12px;
+}
+
+.sensor-finger-title span,
+.sensor-finger small {
+    color: var(--muted);
+    font-size: 10px;
+}
+
+.tactile-grid {
+    display: grid;
+    gap: 2px;
+    grid-template-columns: repeat(6, 1fr);
+}
+
+.tactile-cell {
+    align-items: center;
+    aspect-ratio: 1;
+    border: 1px solid rgba(72, 29, 23, 0.1);
+    border-radius: 3px;
+    display: flex;
+    font-size: 8px;
+    font-weight: 800;
+    justify-content: center;
+    line-height: 1;
+    min-width: 0;
+    overflow: hidden;
+}
+
+.sensor-empty {
+    align-items: center;
+    background: rgba(255, 253, 246, 0.72);
+    border: 1px dashed var(--line);
+    border-radius: 8px;
+    color: var(--muted);
+    display: flex;
+    justify-content: center;
+    min-height: 180px;
+    padding: 24px;
+    text-align: center;
+}
+
+@media (max-width: 1260px) {
+    .sensor-monitor {
+        grid-template-columns: 1fr;
+    }
+
+    .sensor-control-panel {
+        position: static;
+    }
+}
+
+@media (max-width: 720px) {
+    .view-switch {
+        order: 3;
+        width: 100%;
+    }
+
+    .view-switch-button {
+        flex: 1;
+    }
+
+    .sensor-card-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .sensor-hand-scene {
+        min-height: 760px;
+    }
+
+    .sensor-finger {
+        position: static;
+        transform: none !important;
+        width: auto;
+        margin: 10px;
+    }
+
+    .sensor-palm-core {
+        display: none;
+    }
+}

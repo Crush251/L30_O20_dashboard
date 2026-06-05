@@ -16,6 +16,7 @@ from .o20_protocol import (
     O20_CONTROL_COUNT,
     O20_DEFAULT_DEVICE_ID,
     O20_FRAME_JOINT_COUNT,
+    O20_FRAME_TYPE,
     O20_REG_DEVICE_INFO,
     O20_REG_ERROR_STATUS,
     O20_REG_TARGET_POS,
@@ -36,6 +37,7 @@ from .protocol import (
     HOST_ID,
     PCMD_CONFIG,
     PCMD_JOINT_CTRL,
+    PCMD_TACTILE_SENSOR,
     PROTOCOL_PRIORITY,
     SCMD_DEVICE_INFO,
     SCMD_GLOBAL_DISABLE,
@@ -52,6 +54,13 @@ from .protocol import (
     parse_l30_device_info,
     parse_l30_product_code,
     parse_l30_status,
+)
+from .sensor_protocol import (
+    FINGER_SENSOR_SPECS,
+    make_mock_tactile_values,
+    parse_l30_tactile_frames,
+    parse_o20_tactile_block,
+    tactile_summary,
 )
 from .sequences import JOINT_COUNT
 from .win_l30_can import WindowsL30Can
@@ -375,6 +384,287 @@ class CanBusController:
                 results.append(self._discover_l30_device_info(state, timeout_ms=timeout_ms))
         return results
 
+    def query_tactile_sensors(
+        self,
+        dev_ids: Iterable[int],
+        profiles: dict[int, object] | None = None,
+        timeout_ms: int = 120,
+    ) -> list[dict]:
+        """主动读取已连接设备的触觉传感器数据，并按统一结构返回。"""
+        profile_map = {int(dev): profile for dev, profile in (profiles or {}).items()}
+        results = []
+        with self.lock:
+            for state in self._selected_existing_open_devices(dev_ids):
+                model, device_id = self._sensor_model_for_state(state, profile_map.get(state.dev))
+                if model == "l30":
+                    results.append(self._query_l30_tactile_sensors(state, timeout_ms=timeout_ms))
+                elif model == "o20":
+                    results.append(
+                        self._query_o20_tactile_sensors(
+                            state,
+                            device_id=device_id or O20_DEFAULT_DEVICE_ID,
+                            timeout_ms=timeout_ms,
+                        )
+                    )
+                else:
+                    results.append(
+                        {
+                            "dev": state.dev,
+                            "model": "unknown",
+                            "supported": False,
+                            "message": "设备型号未知，请先执行设备查询或在传感器页手动选择型号",
+                            "fingers": [],
+                            "summary": {"online_fingers": 0, "max": 0, "avg": 0},
+                            "updated_at": time.time(),
+                        }
+                    )
+        return results
+
+    def _sensor_profile_value(self, profile: object, name: str, default: object = None) -> object:
+        """兼容 Pydantic 模型和普通 dict 的 profile 读取。"""
+        if profile is None:
+            return default
+        if isinstance(profile, dict):
+            return profile.get(name, default)
+        return getattr(profile, name, default)
+
+    def _sensor_model_for_state(
+        self, state: DeviceState, profile: object | None
+    ) -> tuple[str, int | None]:
+        """根据前端 profile 和后端已缓存信息判断设备型号。"""
+        profile_model = str(self._sensor_profile_value(profile, "model", "") or "").lower()
+        profile_device_id = self._sensor_profile_value(profile, "device_id", None)
+        try:
+            device_id = int(profile_device_id) if profile_device_id is not None else None
+        except (TypeError, ValueError):
+            device_id = None
+
+        if profile_model in {"l30", "o20"}:
+            return profile_model, device_id
+
+        info = state.info or {}
+        product = str(info.get("product") or info.get("model") or "").lower()
+        if product == "l30" or info.get("product_id") == 0x13:
+            return "l30", None
+        if product == "o20" or info.get("o20_info"):
+            try:
+                return "o20", int(info.get("o20_device_id") or O20_DEFAULT_DEVICE_ID)
+            except (TypeError, ValueError):
+                return "o20", O20_DEFAULT_DEVICE_ID
+        return "unknown", device_id
+
+    def _query_o20_tactile_sensors(
+        self,
+        state: DeviceState,
+        device_id: int,
+        timeout_ms: int = 120,
+    ) -> dict:
+        """按 O20 0x09~0x12 主动读取五指触觉数据。"""
+        if self.mock:
+            return self._mock_tactile_result(state, model="o20", device_id=device_id)
+
+        fingers = []
+        for finger_index, spec in enumerate(FINGER_SENSOR_SPECS):
+            data1, rx1 = self._read_o20_tactile_register(
+                state, device_id, spec.o20_data1_reg, 64, timeout_ms
+            )
+            data2, rx2 = self._read_o20_tactile_register(
+                state, device_id, spec.o20_data2_reg, 9, timeout_ms
+            )
+            parsed = parse_o20_tactile_block(data1 or b"", data2 or b"")
+            fingers.append(
+                {
+                    "key": spec.key,
+                    "label": spec.label,
+                    "online": bool(parsed["online"]),
+                    "values": parsed["values"],
+                    "rows": parsed["rows"],
+                    "cols": parsed["cols"],
+                    "max": parsed["max"],
+                    "avg": parsed["avg"],
+                    "rx_count": rx1 + rx2,
+                    "query_registers": [
+                        f"0x{spec.o20_data1_reg:02X}",
+                        f"0x{spec.o20_data2_reg:02X}",
+                    ],
+                    "error": (
+                        ""
+                        if data1 is not None and data2 is not None
+                        else "未收到完整触觉寄存器回传"
+                    ),
+                    "order": finger_index,
+                }
+            )
+        return {
+            "dev": state.dev,
+            "model": "o20",
+            "device_id": device_id,
+            "supported": True,
+            "fingers": fingers,
+            "summary": tactile_summary(fingers),
+            "updated_at": time.time(),
+        }
+
+    def _read_o20_tactile_register(
+        self,
+        state: DeviceState,
+        device_id: int,
+        register_addr: int,
+        expected_length: int,
+        timeout_ms: int,
+    ) -> tuple[bytes | None, int]:
+        """读取 O20 单个触觉寄存器，并裁剪 CANFD DLC 填充字节。"""
+        read_id = o20_build_can_id(device_id, register_addr, False)
+        self._send_can_frame(
+            state,
+            read_id,
+            b"",
+            label="sensor-o20-read",
+            frame_type=O20_FRAME_TYPE,
+        )
+        messages = self._receive_canfd(state, timeout_ms=timeout_ms)
+        self._record_rx_frames(state, messages, label="sensor-o20-rx")
+        for can_id, data in messages:
+            rx_id = can_id & 0x1FFFFFFF
+            rx_device_id = (rx_id >> 21) & 0xFF
+            rx_register = (rx_id >> 13) & 0xFF
+            if rx_device_id == int(device_id) and rx_register == int(register_addr):
+                return bytes(data[:expected_length]), len(messages)
+        return None, len(messages)
+
+    def _query_l30_tactile_sensors(self, state: DeviceState, timeout_ms: int = 120) -> dict:
+        """按 L30 v2 父命令 0x2 主动读取五指 12x6 触觉矩阵。"""
+        if self.mock:
+            return self._mock_tactile_result(state, model="l30", node_id=self._l30_node_id(state))
+
+        node_id = self._l30_node_id(state)
+        fingers = []
+        for finger_index, spec in enumerate(FINGER_SENSOR_SPECS):
+            frames, rx_count, query_id = self._read_l30_tactile_finger(
+                state, node_id, spec.l30_scmd, timeout_ms
+            )
+            parsed = parse_l30_tactile_frames(frames)
+            fingers.append(
+                {
+                    "key": spec.key,
+                    "label": spec.label,
+                    "online": bool(parsed["online"]),
+                    "values": parsed["values"],
+                    "rows": parsed["rows"],
+                    "cols": parsed["cols"],
+                    "max": parsed["max"],
+                    "avg": parsed["avg"],
+                    "status": parsed.get("status"),
+                    "complete": parsed.get("complete"),
+                    "received_frames": parsed.get("received_frames"),
+                    "expected_frames": parsed.get("expected_frames"),
+                    "rx_count": rx_count,
+                    "query_id": query_id,
+                    "error": "" if parsed.get("online") else "未收到完整 L30 触觉多帧回传",
+                    "order": finger_index,
+                }
+            )
+        return {
+            "dev": state.dev,
+            "model": "l30",
+            "node_id": node_id,
+            "supported": True,
+            "fingers": fingers,
+            "summary": tactile_summary(fingers),
+            "updated_at": time.time(),
+        }
+
+    def _read_l30_tactile_finger(
+        self,
+        state: DeviceState,
+        node_id: int,
+        scmd: int,
+        timeout_ms: int,
+    ) -> tuple[list[bytes], int, str]:
+        """读取 L30 单指触觉多帧，并在拼包完成前不发起下一指请求。"""
+        read_id = self._build_l30_can_id(
+            state, 0, PCMD_TACTILE_SENSOR, scmd, dst_id=node_id
+        )
+        self._send_can_frame(state, read_id, encode_empty_payload(), label="sensor-l30-read")
+        deadline = time.monotonic() + max(0.01, timeout_ms / 1000)
+        messages: list[tuple[int, bytes]] = []
+        matched_frames: list[bytes] = []
+        while time.monotonic() < deadline:
+            remaining_ms = max(1, min(20, int((deadline - time.monotonic()) * 1000)))
+            batch = self._receive_canfd(state, timeout_ms=remaining_ms)
+            if batch:
+                messages.extend(batch)
+                matched_frames = self._matched_l30_tactile_frames(messages, node_id, scmd)
+                parsed = parse_l30_tactile_frames(matched_frames)
+                if parsed.get("complete"):
+                    break
+            else:
+                time.sleep(0.001)
+        self._record_rx_frames(state, messages, label="sensor-l30-rx")
+        return matched_frames, len(messages), f"0x{read_id:08X}"
+
+    def _matched_l30_tactile_frames(
+        self,
+        messages: Iterable[tuple[int, bytes]],
+        node_id: int,
+        scmd: int,
+    ) -> list[bytes]:
+        """从 RX 批次中过滤当前 L30 触觉请求的应答帧。"""
+        frames = []
+        for can_id, data in messages:
+            rx_id = can_id & 0x1FFFFFFF
+            fields = parse_can_id(rx_id)
+            if (
+                fields["access"] == 0
+                and fields["pcmd"] == PCMD_TACTILE_SENSOR
+                and fields["scmd"] == scmd
+                and fields["dst_id"] == HOST_ID
+                and fields["src_id"] == node_id
+            ):
+                frames.append(data)
+        return frames
+
+    def _mock_tactile_result(
+        self,
+        state: DeviceState,
+        model: str,
+        device_id: int | None = None,
+        node_id: int | None = None,
+    ) -> dict:
+        """生成统一 mock 触觉数据，供无硬件演示传感器页面。"""
+        fingers = []
+        for index, spec in enumerate(FINGER_SENSOR_SPECS):
+            values = make_mock_tactile_values(state.dev * 11 + index)
+            fingers.append(
+                {
+                    "key": spec.key,
+                    "label": spec.label,
+                    "online": True,
+                    "values": values,
+                    "rows": 12,
+                    "cols": 6,
+                    "max": max(values),
+                    "avg": round(sum(values) / len(values), 1),
+                    "order": index,
+                    "rx_count": 0,
+                    "error": "",
+                }
+            )
+        result = {
+            "dev": state.dev,
+            "model": model,
+            "supported": True,
+            "fingers": fingers,
+            "summary": tactile_summary(fingers),
+            "updated_at": time.time(),
+            "mock": True,
+        }
+        if device_id is not None:
+            result["device_id"] = int(device_id)
+        if node_id is not None:
+            result["node_id"] = int(node_id)
+        return result
+
     def send_raw_joint_payload(
         self, dev_ids: Iterable[int], payload: bytes, label: str = "raw-joint"
     ) -> list[dict]:
@@ -649,6 +939,15 @@ class CanBusController:
                             matched_can_id = can_id
                             break
                     response_device_id = ((matched_can_id or 0) >> 21) & 0xFF
+                    parsed_info = o20_parse_device_info(matched or b"") if matched is not None else {}
+                    if matched is not None and parsed_info:
+                        state.info = {
+                            **state.info,
+                            "product": "O20",
+                            "model": "O20",
+                            "o20_device_id": response_device_id or probe_id,
+                            "o20_info": parsed_info,
+                        }
                     results.append(
                         {
                             "dev": state.dev,
@@ -658,7 +957,7 @@ class CanBusController:
                             "reply_id": f"0x{matched_can_id:08X}" if matched_can_id is not None else "",
                             "can_id": f"0x{read_id:08X}",
                             "matched": matched is not None,
-                            "info": o20_parse_device_info(matched or b"") if matched is not None else {},
+                            "info": parsed_info,
                             "rx_count": len(messages),
                             "rx_ids": [f"0x{can_id & 0x1FFFFFFF:08X}" for can_id, _data in messages],
                         }

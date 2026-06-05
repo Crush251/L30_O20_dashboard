@@ -329,7 +329,7 @@
     }
 
     function renderTx(frames) {
-        const visibleFrames = frames.filter((frame) => !["o20-info-read", "o20-error-read", "l30-info-read"].includes(frame.label));
+        const visibleFrames = frames.filter((frame) => !String(frame.label || "").startsWith("sensor-") && !["o20-info-read", "o20-error-read", "l30-info-read"].includes(frame.label));
         if (!visibleFrames.length) {
             els.txLog.textContent = "暂无有效记录";
             return;

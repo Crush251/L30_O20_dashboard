@@ -67,6 +67,21 @@ class O20ErrorRequest(DeviceSelection):
     device_ids: dict[int, int] = Field(default_factory=dict)
 
 
+
+
+class SensorDeviceProfile(BaseModel):
+    """传感器页面提交的单个设备型号信息。"""
+
+    model: str = "unknown"
+    device_id: int = Field(default=O20_DEFAULT_DEVICE_ID, ge=1, le=255)
+
+
+class SensorReadRequest(DeviceSelection):
+    """传感器主动查询请求，profiles 用于区分 L30/O20 和 O20 左右手节点。"""
+
+    profiles: dict[int, SensorDeviceProfile] = Field(default_factory=dict)
+
+
 class GameRequest(DeviceSelection):
     """RPS 手势回应请求。"""
 
