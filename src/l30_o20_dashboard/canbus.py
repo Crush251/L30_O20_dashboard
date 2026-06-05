@@ -41,13 +41,16 @@ from .protocol import (
     SCMD_GLOBAL_DISABLE,
     SCMD_GLOBAL_ENABLE,
     SCMD_JOINT_POS,
+    SCMD_PRODUCT_CODE,
     TRANSMIT_TIMEOUT_MS,
     build_can_id,
     encode_empty_payload,
     encode_joint_payload,
     l30_status_text,
     len_to_dlc,
+    parse_can_id,
     parse_l30_device_info,
+    parse_l30_product_code,
     parse_l30_status,
 )
 from .sequences import JOINT_COUNT
@@ -137,11 +140,22 @@ class CanBusController:
             else:
                 self.lib = self._load_library()
 
+    def _linux_library_names(self) -> list[str]:
+        """Return Linux CAN library names in the order preferred for this CPU."""
+        machine = platform.machine().lower()
+        if machine in {"aarch64", "arm64"}:
+            return ["libcanbus_arm64.so", "libcanbus.so"]
+        return ["libcanbus.so", "libcanbus_arm64.so"]
+
     def _default_library_path(self) -> Path:
         if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
             bundled_root = Path(sys._MEIPASS) / "libcanbus"
             if self.system == "windows":
                 return bundled_root / "HCanbus.dll"
+            for name in self._linux_library_names():
+                candidate = bundled_root / name
+                if candidate.exists():
+                    return candidate
             return bundled_root / "libcanbus.so"
 
         package_root = Path(__file__).resolve().parent
@@ -164,8 +178,9 @@ class CanBusController:
             return project_root / "HCanbus.dll"
 
         candidates = [
-            project_root / "libcanbus" / "libcanbus.so",
-            workspace_root / "libcanbus" / "libcanbus.so",
+            root / "libcanbus" / name
+            for root in (project_root, workspace_root)
+            for name in self._linux_library_names()
         ]
         for candidate in candidates:
             if candidate.exists():
@@ -244,16 +259,48 @@ class CanBusController:
                 "devices": [self._device_payload(self.devices[dev]) for dev in range(count)],
             }
 
-    def open_devices(self, dev_ids: Iterable[int]) -> list[dict]:
-        """打开指定设备，已打开的设备会直接复用。"""
+    def open_devices(self, dev_ids: Iterable[int], force: bool = False) -> list[dict]:
+        """打开指定设备，已打开的设备会直接复用；force=True 时显式尝试接管。"""
         opened = []
         with self.lock:
             for dev in sorted({int(x) for x in dev_ids}):
                 state = self.devices.setdefault(dev, DeviceState(dev=dev))
-                if not state.opened:
+                if state.opened:
+                    opened.append(self._device_payload(state))
+                    continue
+                try:
                     self._open_one(state)
+                except Exception as exc:
+                    if not force or not self._can_force_takeover(exc):
+                        raise
+                    self._force_release_device(state)
+                    try:
+                        self._open_one(state)
+                    except Exception as retry_exc:
+                        raise RuntimeError(
+                            f"force open dev={state.dev} failed after close/reopen: {retry_exc}"
+                        ) from retry_exc
                 opened.append(self._device_payload(state))
         return opened
+
+    def _can_force_takeover(self, exc: Exception) -> bool:
+        """判断打开失败是否属于可尝试强制接管的设备占用类错误。"""
+        message = str(exc).lower()
+        return "can_opendevice" in message or "busy" in message or "occupied" in message
+
+    def _force_release_device(self, state: DeviceState) -> None:
+        """显式尝试释放设备句柄；跨进程是否生效取决于厂商驱动。"""
+        state.opened = False
+        state.enabled = False
+        if self.mock:
+            return
+        try:
+            if self.win is not None:
+                self.win.close(state.dev)
+            else:
+                self._close_device(state.dev, state.ch)
+        finally:
+            time.sleep(0.12)
 
     def close_all(self) -> None:
         """关闭所有已打开设备，并清空使能状态。"""
@@ -273,7 +320,7 @@ class CanBusController:
         label = "l30-enable" if enabled else "l30-disable"
         data = encode_empty_payload()
         with self.lock:
-            for state in self._selected_open_devices(dev_ids):
+            for state in self._selected_existing_open_devices(dev_ids):
                 ack = self._send_l30_command_with_ack(state, PCMD_JOINT_CTRL, scmd, data, label)
                 if not ack.get("matched"):
                     info_result = self._discover_l30_device_info(state, timeout_ms=50)
@@ -410,6 +457,7 @@ class CanBusController:
         frame_type: int = 0x04,
         label: str = "o20-raw-pos",
         require_open: bool = False,
+        probe_after_write: bool = True,
     ) -> list[dict]:
         """同一帧内向多个 O20 设备发送原始目标位置，每个 DEV 可使用独立左右手指令码。"""
         raw_values = [int(round(float(value))) for value in positions]
@@ -432,8 +480,33 @@ class CanBusController:
                 self._send_can_frame(state, can_id, payload, label=label, frame_type=frame_type)
                 state.joints = state_values
                 results.append(self._device_payload(state))
-        self._schedule_o20_rx_probe(dev_ids, label=f"{label}-rx", timeout_ms=50)
+        if probe_after_write:
+            self._schedule_o20_rx_probe(dev_ids, label=f"{label}-rx", timeout_ms=50)
         return results
+
+    def drain_rx_buffers(
+        self,
+        dev_ids: Iterable[int],
+        max_rounds: int = 4,
+        max_count: int = 64,
+        timeout_ms: int = 1,
+    ) -> dict[int, int]:
+        """主动清理已连接设备的 RX 缓冲，供长时间 dance 执行时防止回传堆积。"""
+        drained: dict[int, int] = {}
+        with self.lock:
+            for state in self._selected_existing_open_devices(dev_ids):
+                total = 0
+                for _round in range(max(1, int(max_rounds))):
+                    messages = self._receive_canfd(
+                        state,
+                        max_count=max(1, int(max_count)),
+                        timeout_ms=max(0, int(timeout_ms)),
+                    )
+                    if not messages:
+                        break
+                    total += len(messages)
+                drained[state.dev] = total
+        return drained
 
     def set_o20_velocity(
         self,
@@ -598,7 +671,7 @@ class CanBusController:
         for step in sequence:
             positions = step.get("joints", [0] * JOINT_COUNT)
             hold_ms = int(step.get("hold_ms", 180))
-            sent = self.set_joints(dev_ids, positions)
+            sent = self.set_joints(dev_ids, positions, require_open=True)
             time.sleep(max(0, hold_ms) / 1000)
         return sent
 
@@ -635,6 +708,10 @@ class CanBusController:
 
     def explain_error(self, message: str) -> str:
         """把底层 DLL/so 错误转换成更适合界面展示的中文提示。"""
+        if "is not opened" in message:
+            return f"{message}. 请先在设备区勾选并连接该 CANFD 设备，发送路径不会自动打开设备。"
+        if "force open" in message:
+            return f"{message}. 已尝试强制接管，但驱动仍拒绝打开；请确认其他程序是否仍在占用该 USB-CANFD。"
         if "CAN_OpenDevice" in message and "failed: -1" in message:
             command = ".\\run_windows.bat" if self.system == "windows" else "./run_sudo.sh"
             return (
@@ -793,8 +870,9 @@ class CanBusController:
         timeout_ms: int = 100,
     ) -> dict[str, object]:
         """发送 L30 有应答命令，并返回匹配应答里的状态码。"""
+        request_access = 1
         dst_id = self._l30_node_id(state)
-        can_id = self._build_l30_can_id(state, 1, pcmd, scmd, dst_id=dst_id)
+        can_id = self._build_l30_can_id(state, request_access, pcmd, scmd, dst_id=dst_id)
         self._send_can_frame(state, can_id, data, label=label)
         if self.mock:
             return {
@@ -810,11 +888,14 @@ class CanBusController:
         matched_can_id = None
         for rx_can_id, rx_data in messages:
             rx_id = rx_can_id & 0x1FFFFFFF
-            parent = (rx_id >> 21) & 0x0F
-            subcmd = (rx_id >> 13) & 0xFF
-            dst = (rx_id >> 8) & 0x1F
-            src = (rx_id >> 3) & 0x1F
-            if parent == pcmd and subcmd == scmd and dst == HOST_ID and src == dst_id:
+            fields = parse_can_id(rx_id)
+            if (
+                fields["access"] == request_access
+                and fields["pcmd"] == pcmd
+                and fields["scmd"] == scmd
+                and fields["dst_id"] == HOST_ID
+                and fields["src_id"] == dst_id
+            ):
                 matched_data = rx_data
                 matched_can_id = rx_id
                 break
@@ -827,6 +908,58 @@ class CanBusController:
             "reply_id": f"0x{matched_can_id:08X}" if matched_can_id is not None else "",
         }
 
+    def _read_l30_product_code(self, state: DeviceState, node_id: int, timeout_ms: int = 50) -> dict:
+        """读取 L30 产品编码字符串，按最新生产贴标规则补充展示信息。"""
+        request_access = 0
+        read_id = self._build_l30_can_id(
+            state, request_access, PCMD_CONFIG, SCMD_PRODUCT_CODE, dst_id=node_id
+        )
+        self._send_can_frame(state, read_id, encode_empty_payload(), label="l30-product-code-read")
+        if self.mock:
+            code = f"LHT30-06-{state.dev + 1:03d}-L-B-B-A"
+            return {
+                "dev": state.dev,
+                "query_id": f"0x{read_id:08X}",
+                "query_node_id": node_id,
+                "reply_id": "",
+                "matched": True,
+                "info": parse_l30_product_code(code.encode("ascii")),
+                "rx_count": 0,
+            }
+
+        messages = self._receive_canfd(state, timeout_ms=timeout_ms)
+        self._record_rx_frames(state, messages, label="l30-product-code-rx")
+        for can_id, data in messages:
+            rx_id = can_id & 0x1FFFFFFF
+            fields = parse_can_id(rx_id)
+            if (
+                fields["access"] == request_access
+                and fields["pcmd"] == PCMD_CONFIG
+                and fields["scmd"] == SCMD_PRODUCT_CODE
+                and fields["dst_id"] == HOST_ID
+                and fields["src_id"] == node_id
+            ):
+                info = parse_l30_product_code(data)
+                return {
+                    "dev": state.dev,
+                    "query_id": f"0x{read_id:08X}",
+                    "query_node_id": node_id,
+                    "reply_id": f"0x{rx_id:08X}",
+                    "matched": bool(info),
+                    "info": info,
+                    "rx_count": len(messages),
+                }
+        return {
+            "dev": state.dev,
+            "query_id": f"0x{read_id:08X}",
+            "query_node_id": node_id,
+            "reply_id": "",
+            "matched": False,
+            "info": {},
+            "rx_count": len(messages),
+        }
+
+
     def _discover_l30_device_info(self, state: DeviceState, timeout_ms: int = 50) -> dict:
         """轮询 NodeID 读取 L30 DeviceInFo，并把成功结果写回设备状态。"""
         probed_ids = []
@@ -834,8 +967,9 @@ class CanBusController:
         last_query_id = ""
         for node_id in self._l30_probe_node_ids(state):
             probed_ids.append(node_id)
+            request_access = 0
             read_id = self._build_l30_can_id(
-                state, 0, PCMD_CONFIG, SCMD_DEVICE_INFO, dst_id=node_id
+                state, request_access, PCMD_CONFIG, SCMD_DEVICE_INFO, dst_id=node_id
             )
             last_query_id = f"0x{read_id:08X}"
             self._send_can_frame(state, read_id, encode_empty_payload(), label="l30-info-read")
@@ -855,6 +989,8 @@ class CanBusController:
                     "sensor": "华威科",
                     "origin_code": 1,
                     "origin": "北京自装",
+                    "product_code": f"LHT30-06-{state.dev + 1:03d}-L-B-B-A",
+                    "serial_label": f"LHT30-06-{state.dev + 1:03d}",
                 }
                 state.info = {**state.info, **info}
                 return {
@@ -872,19 +1008,23 @@ class CanBusController:
             self._record_rx_frames(state, messages, label="l30-info-rx")
             for can_id, data in messages:
                 rx_id = can_id & 0x1FFFFFFF
-                parent = (rx_id >> 21) & 0x0F
-                subcmd = (rx_id >> 13) & 0xFF
-                dst_id = (rx_id >> 8) & 0x1F
-                src_id = (rx_id >> 3) & 0x1F
+                fields = parse_can_id(rx_id)
                 if (
-                    parent == PCMD_CONFIG
-                    and subcmd == SCMD_DEVICE_INFO
-                    and dst_id == HOST_ID
-                    and src_id == node_id
+                    fields["access"] == request_access
+                    and fields["pcmd"] == PCMD_CONFIG
+                    and fields["scmd"] == SCMD_DEVICE_INFO
+                    and fields["dst_id"] == HOST_ID
+                    and fields["src_id"] == node_id
                 ):
                     info = parse_l30_device_info(data)
+                    product_result = {"matched": False, "info": {}, "rx_count": 0}
                     if info:
                         info = {**info, "l30_node_id": int(info.get("node_id", node_id))}
+                        product_result = self._read_l30_product_code(
+                            state, int(info.get("node_id", node_id)), timeout_ms=timeout_ms
+                        )
+                        if product_result.get("matched") and product_result.get("info"):
+                            info = {**info, **(product_result.get("info") or {})}
                         state.info = {**state.info, **info}
                     return {
                         "dev": state.dev,
@@ -893,8 +1033,9 @@ class CanBusController:
                         "reply_id": f"0x{rx_id:08X}",
                         "matched": True,
                         "info": info,
-                        "rx_count": rx_total,
+                        "rx_count": rx_total + int(product_result.get("rx_count", 0)),
                         "probed_ids": probed_ids,
+                        "product_code": product_result,
                     }
         return {
             "dev": state.dev,
@@ -1005,7 +1146,8 @@ class CanBusController:
             print(f"RX-PROBE DEV{state.dev} {label} count={len(messages)}", flush=True)
         for can_id, data in messages:
             rx_id = can_id & 0x1FFFFFFF
-            register = (rx_id >> 13) & 0xFF
+            fields = parse_can_id(rx_id)
+            register = fields["scmd"]
             if label.startswith(("o20", "l30")):
                 print(
                     f"RX DEV{state.dev} {label} 0x{rx_id:08X} "
@@ -1014,10 +1156,11 @@ class CanBusController:
                 )
             if label.startswith("l30"):
                 parsed: dict[str, object] = {
-                    "pcmd": f"0x{(rx_id >> 21) & 0x0F:02X}",
+                    "access": fields["access"],
+                    "pcmd": f"0x{fields['pcmd']:02X}",
                     "scmd": f"0x{register:02X}",
-                    "dst_id": (rx_id >> 8) & 0x1F,
-                    "src_id": (rx_id >> 3) & 0x1F,
+                    "dst_id": fields["dst_id"],
+                    "src_id": fields["src_id"],
                 }
                 if len(data) >= 3:
                     status = parse_l30_status(data)
@@ -1027,6 +1170,10 @@ class CanBusController:
                     info = parse_l30_device_info(data)
                     if info:
                         parsed["device_info"] = info
+                elif label == "l30-product-code-rx":
+                    info = parse_l30_product_code(data)
+                    if info:
+                        parsed["product_code"] = info
             else:
                 parsed = {
                     "device_id": (rx_id >> 21) & 0xFF,
@@ -1088,13 +1235,8 @@ class CanBusController:
         return ""
 
     def _selected_open_devices(self, dev_ids: Iterable[int]) -> list[DeviceState]:
-        states = []
-        for dev in sorted({int(x) for x in dev_ids}):
-            state = self.devices.setdefault(dev, DeviceState(dev=dev))
-            if not state.opened:
-                self._open_one(state)
-            states.append(state)
-        return states
+        """兼容旧调用名，但不再隐式打开设备。"""
+        return self._selected_existing_open_devices(dev_ids)
 
     def _selected_existing_open_devices(self, dev_ids: Iterable[int]) -> list[DeviceState]:
         """只返回已经打开的设备，禁止调用方触发隐式 open。"""

@@ -42,3 +42,6 @@ Thumbs.db
 .env
 .env.*
 !.env.example
+# Root-level packaged binaries
+/l30-o20-dashboard*
+/l30-rps-demo

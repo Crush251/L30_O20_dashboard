@@ -20,6 +20,7 @@ class DeviceSelection(BaseModel):
     """前端勾选的 USB-CANFD 设备编号列表。"""
 
     devices: list[int] = Field(default_factory=list)
+    force: bool = False
 
 
 class EnableRequest(DeviceSelection):
@@ -41,7 +42,6 @@ class O20JointRequest(DeviceSelection):
     joints: list[JointValue] = Field(min_length=O20_CONTROL_COUNT, max_length=O20_CONTROL_COUNT)
     device_id: int = Field(default=O20_DEFAULT_DEVICE_ID, ge=1, le=255)
     device_ids: dict[int, int] = Field(default_factory=dict)
-    frame_type: int = Field(default=0x04, ge=0, le=255)
     require_open: bool = False
 
 
@@ -51,7 +51,6 @@ class O20VelocityRequest(DeviceSelection):
     velocity: int = Field(default=5000, ge=0, le=O20_TARGET_VEL_RAW_MAX)
     device_id: int = Field(default=O20_DEFAULT_DEVICE_ID, ge=1, le=255)
     device_ids: dict[int, int] = Field(default_factory=dict)
-    frame_type: int = Field(default=0x04, ge=0, le=255)
     require_open: bool = False
 
 
@@ -59,7 +58,6 @@ class O20InfoRequest(DeviceSelection):
     """O20 设备信息查询请求，device_id=0 表示轮询左右手节点。"""
 
     device_id: int = Field(default=0, ge=0, le=255)
-    frame_type: int = Field(default=0x04, ge=0, le=255)
 
 
 class O20ErrorRequest(DeviceSelection):
@@ -67,7 +65,6 @@ class O20ErrorRequest(DeviceSelection):
 
     device_id: int = Field(default=O20_DEFAULT_DEVICE_ID, ge=1, le=255)
     device_ids: dict[int, int] = Field(default_factory=dict)
-    frame_type: int = Field(default=0x04, ge=0, le=255)
 
 
 class GameRequest(DeviceSelection):
@@ -89,7 +86,6 @@ class O20DanceRequest(DanceRequest):
 
     device_id: int = Field(default=O20_DEFAULT_DEVICE_ID, ge=1, le=255)
     device_ids: dict[int, int] = Field(default_factory=dict)
-    frame_type: int = Field(default=0x04, ge=0, le=255)
 
 
 class SequenceSaveRequest(BaseModel):
@@ -104,4 +100,3 @@ class O20GameRequest(GameRequest):
 
     device_id: int = Field(default=O20_DEFAULT_DEVICE_ID, ge=1, le=255)
     device_ids: dict[int, int] = Field(default_factory=dict)
-    frame_type: int = Field(default=0x04, ge=0, le=255)

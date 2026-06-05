@@ -11,7 +11,7 @@
         <script src="/static/vendor/mediapipe/hands/hands.js" defer></script>
         <script src="/static/gesture.js?v=2" defer></script>
         <script src="/static/o20_config.js?v=5" defer></script>
-        <script src="/static/o20.js?v=22" defer></script>
+        <script src="/static/o20.js?v=23" defer></script>
     </head>
     <body>
         <main class="shell">
@@ -68,13 +68,6 @@
                             <button class="tool-button" id="o20InfoBtn" type="button">设备查询</button>
                             <button class="tool-button" id="o20ErrorBtn" type="button">查询错误</button>
                             <button class="tool-button" id="o20ClearErrorBtn" type="button">清除错误</button>
-                            <label class="compact-field">
-                                <span>FrameType</span>
-                                <select id="o20FrameType">
-                                    <option value="4" selected>0x04</option>
-                                    <option value="12">0x0C</option>
-                                </select>
-                            </label>
                             <label class="compact-field">
                                 <span>速度%</span>
                                 <input id="o20Velocity" type="number" min="0" max="100" step="1" value="50" />

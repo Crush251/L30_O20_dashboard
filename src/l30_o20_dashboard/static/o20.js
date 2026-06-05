@@ -46,7 +46,6 @@
         els.openBtn = document.getElementById("openBtn");
         els.txLog = document.getElementById("txLog");
         els.o20Sliders = document.getElementById("o20Sliders");
-        els.o20FrameType = document.getElementById("o20FrameType");
         els.o20Velocity = document.getElementById("o20Velocity");
         els.o20InfoBtn = document.getElementById("o20InfoBtn");
         els.o20ErrorBtn = document.getElementById("o20ErrorBtn");
@@ -242,10 +241,6 @@
 
     function selectedDeviceIdMap() {
         return Object.fromEntries(selectedDevices().map((dev) => [String(dev), Number(profileFor(dev).deviceId) || 1]));
-    }
-
-    function selectedFrameType() {
-        return Number(els.o20FrameType?.value) === 12 ? 12 : 4;
     }
 
     function setO20Status(message) {
@@ -510,7 +505,6 @@
                 devices,
                 joints: state.joints,
                 device_ids: selectedDeviceIdMap(),
-                frame_type: selectedFrameType(),
                 require_open: true
             });
             setO20Status(`O20 目标位置已发送：${devices.map((dev) => `DEV${dev}/${handName(profileFor(dev).deviceId)}`).join("，")}`);
@@ -535,7 +529,6 @@
                 devices,
                 velocity: rawVelocity,
                 device_ids: selectedDeviceIdMap(),
-                frame_type: selectedFrameType(),
                 require_open: true
             });
             setO20Status(`O20 目标速度已发送：${velocityPercent}% -> raw ${rawVelocity}；${devices.map((dev) => `DEV${dev}/${handName(profileFor(dev).deviceId)}`).join("，")}`);
@@ -554,8 +547,7 @@
         try {
             const result = await api("/api/o20/info", {
                 devices: selectedDevices(),
-                device_id: 0,
-                frame_type: selectedFrameType()
+                device_id: 0
             });
             const matchedByDev = new Set();
             const lines = (result.results || []).filter((item) => item.matched).map((item) => {
@@ -586,8 +578,7 @@
         try {
             const result = await api("/api/o20/error", {
                 devices: selectedDevices(),
-                device_ids: selectedDeviceIdMap(),
-                frame_type: selectedFrameType()
+                device_ids: selectedDeviceIdMap()
             });
             const lines = (result.results || []).map((item) => {
                 const label = `DEV${item.dev}/${handName(item.device_id)}`;
@@ -608,8 +599,7 @@
         try {
             await api("/api/o20/error/clear", {
                 devices: selectedDevices(),
-                device_ids: selectedDeviceIdMap(),
-                frame_type: selectedFrameType()
+                device_ids: selectedDeviceIdMap()
             });
             setO20Status("错误清除指令已发送");
             await delay(40);
@@ -729,8 +719,7 @@
                 device_ids: selectedDeviceIdMap(),
                 file: state.selectedDanceFile,
                 loop_count: numberInput(els.danceLoopCount, 1),
-                interval_ms: numberInput(els.danceIntervalMs, 30),
-                frame_type: selectedFrameType()
+                interval_ms: numberInput(els.danceIntervalMs, 30)
             }));
             await refreshStatus();
         } catch (error) {
@@ -917,7 +906,6 @@
                 devices,
                 joints,
                 device_ids: selectedDeviceIdMap(),
-                frame_type: selectedFrameType(),
                 require_open: true
             });
             state.lastFollowSentJoints = joints.slice();
@@ -981,8 +969,7 @@
                 await api("/api/o20/game", {
                     devices: selectedDevices(),
                     device_ids: selectedDeviceIdMap(),
-                    gesture: responseGesture,
-                    frame_type: selectedFrameType()
+                    gesture: responseGesture
                 });
                 setGameResult(`识别 ${sourceGesture}，O20 出 ${responseGesture}`);
                 void refreshStatus();

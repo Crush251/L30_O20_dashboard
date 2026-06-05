@@ -14,6 +14,7 @@ from .dance_store import (
     save_l30_sequence,
     save_o20_sequence,
 )
+from .o20_protocol import O20_FRAME_TYPE
 from .paths import O20_DANCE_DIR, STATIC_DIR, TEMPLATE_DIR
 from .schemas import (
     DanceRequest,
@@ -43,19 +44,11 @@ def create_app() -> FastAPI:
     api.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
     @api.get("/", response_class=HTMLResponse)
-    def index() -> str:
-        """返回默认 L30 控制台。"""
-        return (TEMPLATE_DIR / "index.html").read_text(encoding="utf-8")
-
     @api.get("/l30", response_class=HTMLResponse)
-    def l30_page() -> str:
-        """返回 L30 控制台。"""
-        return (TEMPLATE_DIR / "index.html").read_text(encoding="utf-8")
-
     @api.get("/o20", response_class=HTMLResponse)
-    def o20_page() -> str:
-        """返回 O20 控制台。"""
-        return (TEMPLATE_DIR / "o20.html").read_text(encoding="utf-8")
+    def dashboard_page() -> str:
+        """返回统一 L30/O20 Dashboard。"""
+        return (TEMPLATE_DIR / "index.html").read_text(encoding="utf-8")
 
     @api.get("/favicon.ico", include_in_schema=False)
     def favicon() -> Response:
@@ -74,9 +67,9 @@ def create_app() -> FastAPI:
 
     @api.post("/api/open")
     def open_devices(payload: DeviceSelection) -> dict:
-        """打开前端勾选的设备。"""
+        """打开前端勾选的设备；force=True 时显式尝试接管被占用设备。"""
         try:
-            return {"devices": controller.open_devices(payload.devices)}
+            return {"devices": controller.open_devices(payload.devices, force=payload.force)}
         except (RuntimeError, OSError) as exc:
             raise HTTPException(status_code=409, detail=controller.explain_error(str(exc))) from exc
 
@@ -86,6 +79,78 @@ def create_app() -> FastAPI:
         try:
             return {"devices": controller.set_enabled(payload.devices, payload.enabled)}
         except (RuntimeError, OSError) as exc:
+            raise HTTPException(status_code=409, detail=controller.explain_error(str(exc))) from exc
+
+    @api.post("/api/devices/query")
+    def query_devices(payload: DeviceSelection) -> dict:
+        """统一查询设备型号：先按 L30 DeviceInFo 探测，未匹配时再轮询 O20。"""
+        try:
+            devices = [int(dev) for dev in payload.devices]
+            l30_results = controller.query_l30_device_info(devices)
+            l30_by_dev = {
+                int(item["dev"]): item
+                for item in l30_results
+                if item.get("matched") and item.get("info")
+            }
+
+            o20_probe_devs = [dev for dev in devices if dev not in l30_by_dev]
+            o20_results = (
+                controller.query_o20_device_info(
+                    o20_probe_devs,
+                    device_id=0,
+                    frame_type=O20_FRAME_TYPE,
+                )
+                if o20_probe_devs
+                else []
+            )
+            o20_by_dev: dict[int, dict] = {}
+            for item in o20_results:
+                info = item.get("info") or {}
+                if item.get("matched") and info:
+                    o20_by_dev.setdefault(int(item["dev"]), item)
+
+            profiles = []
+            for dev in devices:
+                if dev in l30_by_dev:
+                    item = l30_by_dev[dev]
+                    profiles.append(
+                        {
+                            "dev": dev,
+                            "model": "l30",
+                            "matched": True,
+                            "node_id": (item.get("info") or {}).get("node_id"),
+                            "info": item.get("info") or {},
+                            "source": "l30",
+                        }
+                    )
+                elif dev in o20_by_dev:
+                    item = o20_by_dev[dev]
+                    profiles.append(
+                        {
+                            "dev": dev,
+                            "model": "o20",
+                            "matched": True,
+                            "device_id": item.get("device_id"),
+                            "info": item.get("info") or {},
+                            "source": "o20",
+                        }
+                    )
+                else:
+                    profiles.append(
+                        {
+                            "dev": dev,
+                            "model": "unknown",
+                            "matched": False,
+                            "info": {},
+                            "source": "",
+                        }
+                    )
+            return {
+                "profiles": profiles,
+                "o20_results": o20_results,
+                "l30_results": l30_results,
+            }
+        except (RuntimeError, ValueError, OSError) as exc:
             raise HTTPException(status_code=409, detail=controller.explain_error(str(exc))) from exc
 
     @api.post("/api/l30/info")
@@ -105,7 +170,7 @@ def create_app() -> FastAPI:
                     payload.devices,
                     payload.joints,
                     normalized=True,
-                    require_open=payload.require_open,
+                    require_open=True,
                 )
             }
         except (RuntimeError, ValueError, OSError) as exc:
@@ -121,8 +186,8 @@ def create_app() -> FastAPI:
                     payload.joints,
                     device_ids=payload.device_ids,
                     device_id=payload.device_id,
-                    frame_type=payload.frame_type,
-                    require_open=payload.require_open,
+                    frame_type=O20_FRAME_TYPE,
+                    require_open=True,
                 )
             }
         except (RuntimeError, ValueError, OSError) as exc:
@@ -138,8 +203,8 @@ def create_app() -> FastAPI:
                     payload.velocity,
                     device_ids=payload.device_ids,
                     device_id=payload.device_id,
-                    frame_type=payload.frame_type,
-                    require_open=payload.require_open,
+                    frame_type=O20_FRAME_TYPE,
+                    require_open=True,
                 )
             }
         except (RuntimeError, ValueError, OSError) as exc:
@@ -153,7 +218,7 @@ def create_app() -> FastAPI:
                 "results": controller.query_o20_device_info(
                     payload.devices,
                     device_id=payload.device_id,
-                    frame_type=payload.frame_type,
+                    frame_type=O20_FRAME_TYPE,
                 )
             }
         except (RuntimeError, ValueError, OSError) as exc:
@@ -168,7 +233,7 @@ def create_app() -> FastAPI:
                     payload.devices,
                     device_ids=payload.device_ids,
                     device_id=payload.device_id,
-                    frame_type=payload.frame_type,
+                    frame_type=O20_FRAME_TYPE,
                 )
             }
         except (RuntimeError, ValueError, OSError) as exc:
@@ -183,7 +248,7 @@ def create_app() -> FastAPI:
                     payload.devices,
                     device_ids=payload.device_ids,
                     device_id=payload.device_id,
-                    frame_type=payload.frame_type,
+                    frame_type=O20_FRAME_TYPE,
                 )
             }
         except (RuntimeError, ValueError, OSError) as exc:
@@ -199,7 +264,7 @@ def create_app() -> FastAPI:
                 sequence,
                 device_id=payload.device_id,
                 device_ids=payload.device_ids,
-                frame_type=payload.frame_type,
+                frame_type=O20_FRAME_TYPE,
             )
             return {"gesture": payload.gesture, "sent": True, "devices": devices}
         except (RuntimeError, ValueError, OSError) as exc:

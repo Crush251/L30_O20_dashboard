@@ -1,5 +1,6 @@
 # -*- mode: python ; coding: utf-8 -*-
 
+import os
 from pathlib import Path
 
 from PyInstaller.utils.hooks import collect_submodules
@@ -19,7 +20,8 @@ datas = []
 datas += add_tree("src/l30_o20_dashboard/static", "l30_o20_dashboard/static")
 datas += add_tree("src/l30_o20_dashboard/templates", "l30_o20_dashboard/templates")
 datas += add_tree("src/l30_o20_dashboard/dance", "l30_o20_dashboard/dance")
-datas += add_tree("libcanbus/libcanbus.so", "libcanbus")
+linux_canbus_lib = os.environ.get("L30_CANBUS_BUNDLE_LIB", "libcanbus/libcanbus.so")
+datas += add_tree(linux_canbus_lib, "libcanbus")
 datas += add_tree("libcanbus/HCanbus.dll", "libcanbus")
 
 hiddenimports = collect_submodules("uvicorn")
@@ -46,7 +48,11 @@ exe = EXE(
     a.binaries,
     a.datas,
     [],
-    name="l30-o20-dashboard",
+    name=(
+        f"l30-o20-dashboard-{os.environ['L30_DASHBOARD_DIST_SUFFIX']}"
+        if os.environ.get("L30_DASHBOARD_DIST_SUFFIX")
+        else "l30-o20-dashboard"
+    ),
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
