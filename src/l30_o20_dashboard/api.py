@@ -14,6 +14,7 @@ from .dance_store import (
     save_l30_sequence,
     save_o20_sequence,
 )
+from .o20_protocol import O20_FRAME_TYPE
 from .paths import O20_DANCE_DIR, STATIC_DIR, TEMPLATE_DIR
 from .schemas import (
     DanceRequest,
@@ -81,14 +82,26 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=409, detail=controller.explain_error(str(exc))) from exc
 
     @api.post("/api/devices/query")
-    def query_devices(payload: O20InfoRequest) -> dict:
-        """统一查询设备型号：优先识别 O20，未匹配时再按 L30 DeviceInFo 探测。"""
+    def query_devices(payload: DeviceSelection) -> dict:
+        """统一查询设备型号：先按 L30 DeviceInFo 探测，未匹配时再轮询 O20。"""
         try:
             devices = [int(dev) for dev in payload.devices]
-            o20_results = controller.query_o20_device_info(
-                devices,
-                device_id=0,
-                frame_type=payload.frame_type,
+            l30_results = controller.query_l30_device_info(devices)
+            l30_by_dev = {
+                int(item["dev"]): item
+                for item in l30_results
+                if item.get("matched") and item.get("info")
+            }
+
+            o20_probe_devs = [dev for dev in devices if dev not in l30_by_dev]
+            o20_results = (
+                controller.query_o20_device_info(
+                    o20_probe_devs,
+                    device_id=0,
+                    frame_type=O20_FRAME_TYPE,
+                )
+                if o20_probe_devs
+                else []
             )
             o20_by_dev: dict[int, dict] = {}
             for item in o20_results:
@@ -96,29 +109,9 @@ def create_app() -> FastAPI:
                 if item.get("matched") and info:
                     o20_by_dev.setdefault(int(item["dev"]), item)
 
-            l30_probe_devs = [dev for dev in devices if dev not in o20_by_dev]
-            l30_results = controller.query_l30_device_info(l30_probe_devs) if l30_probe_devs else []
-            l30_by_dev = {
-                int(item["dev"]): item
-                for item in l30_results
-                if item.get("matched") and item.get("info")
-            }
-
             profiles = []
             for dev in devices:
-                if dev in o20_by_dev:
-                    item = o20_by_dev[dev]
-                    profiles.append(
-                        {
-                            "dev": dev,
-                            "model": "o20",
-                            "matched": True,
-                            "device_id": item.get("device_id"),
-                            "info": item.get("info") or {},
-                            "source": "o20",
-                        }
-                    )
-                elif dev in l30_by_dev:
+                if dev in l30_by_dev:
                     item = l30_by_dev[dev]
                     profiles.append(
                         {
@@ -128,6 +121,18 @@ def create_app() -> FastAPI:
                             "node_id": (item.get("info") or {}).get("node_id"),
                             "info": item.get("info") or {},
                             "source": "l30",
+                        }
+                    )
+                elif dev in o20_by_dev:
+                    item = o20_by_dev[dev]
+                    profiles.append(
+                        {
+                            "dev": dev,
+                            "model": "o20",
+                            "matched": True,
+                            "device_id": item.get("device_id"),
+                            "info": item.get("info") or {},
+                            "source": "o20",
                         }
                     )
                 else:
@@ -181,7 +186,7 @@ def create_app() -> FastAPI:
                     payload.joints,
                     device_ids=payload.device_ids,
                     device_id=payload.device_id,
-                    frame_type=payload.frame_type,
+                    frame_type=O20_FRAME_TYPE,
                     require_open=True,
                 )
             }
@@ -198,7 +203,7 @@ def create_app() -> FastAPI:
                     payload.velocity,
                     device_ids=payload.device_ids,
                     device_id=payload.device_id,
-                    frame_type=payload.frame_type,
+                    frame_type=O20_FRAME_TYPE,
                     require_open=True,
                 )
             }
@@ -213,7 +218,7 @@ def create_app() -> FastAPI:
                 "results": controller.query_o20_device_info(
                     payload.devices,
                     device_id=payload.device_id,
-                    frame_type=payload.frame_type,
+                    frame_type=O20_FRAME_TYPE,
                 )
             }
         except (RuntimeError, ValueError, OSError) as exc:
@@ -228,7 +233,7 @@ def create_app() -> FastAPI:
                     payload.devices,
                     device_ids=payload.device_ids,
                     device_id=payload.device_id,
-                    frame_type=payload.frame_type,
+                    frame_type=O20_FRAME_TYPE,
                 )
             }
         except (RuntimeError, ValueError, OSError) as exc:
@@ -243,7 +248,7 @@ def create_app() -> FastAPI:
                     payload.devices,
                     device_ids=payload.device_ids,
                     device_id=payload.device_id,
-                    frame_type=payload.frame_type,
+                    frame_type=O20_FRAME_TYPE,
                 )
             }
         except (RuntimeError, ValueError, OSError) as exc:
@@ -259,7 +264,7 @@ def create_app() -> FastAPI:
                 sequence,
                 device_id=payload.device_id,
                 device_ids=payload.device_ids,
-                frame_type=payload.frame_type,
+                frame_type=O20_FRAME_TYPE,
             )
             return {"gesture": payload.gesture, "sent": True, "devices": devices}
         except (RuntimeError, ValueError, OSError) as exc:

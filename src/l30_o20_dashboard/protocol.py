@@ -14,10 +14,17 @@ DEVICE_ID = 1
 PROTOCOL_PRIORITY = 0
 PCMD_JOINT_CTRL = 0x01
 PCMD_CONFIG = 0x03
+PCMD_PERIODIC_REPORT = 0x04
 SCMD_JOINT_POS = 0x01
 SCMD_GLOBAL_ENABLE = 0x07
 SCMD_GLOBAL_DISABLE = 0x08
+SCMD_CONFIG_UNLOCK = 0x01
 SCMD_DEVICE_INFO = 0x02
+SCMD_PRODUCT_CODE = 0x03
+
+# 周期上报配置的 Period 合法范围，Enable=0 时 Period 可为 0。
+L30_PERIOD_MIN_MS = 20
+L30_PERIOD_MAX_MS = 600_000
 
 # 通用状态码，适用于父命令 0x1~0x6。
 L30_STATUS_TEXT = {
@@ -37,7 +44,7 @@ L30_STATUS_TEXT = {
     0x32: "多帧传输超时",
     0x33: "多帧数据不完整",
     0x34: "周期上报配置失败",
-    0x35: "上报周期越界",
+    0x35: "上报周期越界，合法范围 20ms~600000ms",
     0x36: "事件掩码无效",
     0x40: "通信超时",
     0x41: "通信丢失",
@@ -81,6 +88,19 @@ def build_can_id(priority: int, access: int, pcmd: int, scmd: int, dst_id: int, 
     )
 
 
+def parse_can_id(can_id: int) -> dict[str, int]:
+    """解析 L30 29bit 扩展帧 CAN ID，便于严格匹配应答字段。"""
+    raw_id = int(can_id) & 0x1FFFFFFF
+    return {
+        "priority": (raw_id >> 26) & 0x07,
+        "access": (raw_id >> 25) & 0x01,
+        "pcmd": (raw_id >> 21) & 0x0F,
+        "scmd": (raw_id >> 13) & 0xFF,
+        "dst_id": (raw_id >> 8) & 0x1F,
+        "src_id": (raw_id >> 3) & 0x1F,
+    }
+
+
 def encode_joint_payload(positions: Iterable[int]) -> bytes:
     """把 17 个真实关节值编码成 L30 关节位置 payload。"""
     values = list(positions)
@@ -96,6 +116,21 @@ def encode_joint_payload(positions: Iterable[int]) -> bytes:
             2, byteorder="big", signed=True
         )
     return bytes(payload)
+
+
+def encode_periodic_report_config(enabled: bool, period_ms: int, joint_mask: int = 0) -> bytes:
+    """编码 L30 周期上报配置 payload：Enable + uint32 Period + uint32 关节掩码。"""
+    period = int(period_ms)
+    if enabled and not (L30_PERIOD_MIN_MS <= period <= L30_PERIOD_MAX_MS):
+        raise ValueError(
+            f"L30 report period must be {L30_PERIOD_MIN_MS}..{L30_PERIOD_MAX_MS}ms, got {period}"
+        )
+    if not enabled:
+        period = max(0, min(L30_PERIOD_MAX_MS, period))
+    mask = max(0, min(0x1FFFF, int(joint_mask)))
+    return bytes([0x09, 0x00, 0x01 if enabled else 0x00]) + period.to_bytes(
+        4, byteorder="big", signed=False
+    ) + mask.to_bytes(4, byteorder="big", signed=False)
 
 
 def joints_from_dance_row(raw: bytes) -> list[int]:
@@ -195,3 +230,44 @@ def parse_l30_device_info(data: bytes) -> dict[str, str | int]:
         "origin_code": origin,
         "origin": origin_map.get(origin, f"未知({origin})"),
     }
+
+
+def parse_l30_product_code(data: bytes) -> dict[str, str | int]:
+    """解析 L30 产品编码应答，兼容直接传入 ASCII payload 的调试路径。"""
+    raw = bytes(data)
+    if not raw:
+        return {}
+    if len(raw) >= 3 and raw[2] in L30_STATUS_TEXT:
+        response = parse_l30_response(raw)
+        if response.get("status") != 0:
+            return {}
+        raw = bytes(response.get("payload", b""))
+    code = raw.split(b"\0", 1)[0].decode("ascii", errors="ignore").strip()
+    if not code:
+        return {}
+
+    info: dict[str, str | int] = {"product_code": code, "serial_label": code}
+    parts = code.split("-")
+    if len(parts) >= 7:
+        series, version, serial, hand_code, sensor_code, comm_code, origin_code = parts[:7]
+        hand_map = {"L": "左手", "R": "右手"}
+        sensor_map = {"A": "他山", "B": "华威科", "J": "晶智感", "F": "福莱新材", "Z": "无传感器"}
+        origin_map = {"A": "北京自装", "B": "大厂", "C": "固安"}
+        comm_map = {"1": "CAN/CANFD", "B": "CANFD", "2": "Modbus-485"}
+        info.update(
+            {
+                "product_series": series,
+                "product_version": version,
+                "production_no": serial,
+                "serial_label": "-".join(parts[:3]),
+                "hand_code": hand_code,
+                "hand": hand_map.get(hand_code, hand_code),
+                "sensor_code": sensor_code,
+                "sensor": sensor_map.get(sensor_code, sensor_code),
+                "comm_code": comm_code,
+                "communication": comm_map.get(comm_code, comm_code),
+                "origin_code_label": origin_code,
+                "origin": origin_map.get(origin_code, origin_code),
+            }
+        )
+    return info

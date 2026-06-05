@@ -41,13 +41,16 @@ from .protocol import (
     SCMD_GLOBAL_DISABLE,
     SCMD_GLOBAL_ENABLE,
     SCMD_JOINT_POS,
+    SCMD_PRODUCT_CODE,
     TRANSMIT_TIMEOUT_MS,
     build_can_id,
     encode_empty_payload,
     encode_joint_payload,
     l30_status_text,
     len_to_dlc,
+    parse_can_id,
     parse_l30_device_info,
+    parse_l30_product_code,
     parse_l30_status,
 )
 from .sequences import JOINT_COUNT
@@ -250,19 +253,21 @@ class CanBusController:
         with self.lock:
             for dev in sorted({int(x) for x in dev_ids}):
                 state = self.devices.setdefault(dev, DeviceState(dev=dev))
-                if not state.opened:
+                if state.opened:
+                    opened.append(self._device_payload(state))
+                    continue
+                try:
+                    self._open_one(state)
+                except Exception as exc:
+                    if not force or not self._can_force_takeover(exc):
+                        raise
+                    self._force_release_device(state)
                     try:
                         self._open_one(state)
-                    except Exception as exc:
-                        if not force or not self._can_force_takeover(exc):
-                            raise
-                        self._force_release_device(state)
-                        try:
-                            self._open_one(state)
-                        except Exception as retry_exc:
-                            raise RuntimeError(
-                                f"force open dev={state.dev} failed after close/reopen: {retry_exc}"
-                            ) from retry_exc
+                    except Exception as retry_exc:
+                        raise RuntimeError(
+                            f"force open dev={state.dev} failed after close/reopen: {retry_exc}"
+                        ) from retry_exc
                 opened.append(self._device_payload(state))
         return opened
 
@@ -827,8 +832,9 @@ class CanBusController:
         timeout_ms: int = 100,
     ) -> dict[str, object]:
         """发送 L30 有应答命令，并返回匹配应答里的状态码。"""
+        request_access = 1
         dst_id = self._l30_node_id(state)
-        can_id = self._build_l30_can_id(state, 1, pcmd, scmd, dst_id=dst_id)
+        can_id = self._build_l30_can_id(state, request_access, pcmd, scmd, dst_id=dst_id)
         self._send_can_frame(state, can_id, data, label=label)
         if self.mock:
             return {
@@ -844,11 +850,14 @@ class CanBusController:
         matched_can_id = None
         for rx_can_id, rx_data in messages:
             rx_id = rx_can_id & 0x1FFFFFFF
-            parent = (rx_id >> 21) & 0x0F
-            subcmd = (rx_id >> 13) & 0xFF
-            dst = (rx_id >> 8) & 0x1F
-            src = (rx_id >> 3) & 0x1F
-            if parent == pcmd and subcmd == scmd and dst == HOST_ID and src == dst_id:
+            fields = parse_can_id(rx_id)
+            if (
+                fields["access"] == request_access
+                and fields["pcmd"] == pcmd
+                and fields["scmd"] == scmd
+                and fields["dst_id"] == HOST_ID
+                and fields["src_id"] == dst_id
+            ):
                 matched_data = rx_data
                 matched_can_id = rx_id
                 break
@@ -861,6 +870,58 @@ class CanBusController:
             "reply_id": f"0x{matched_can_id:08X}" if matched_can_id is not None else "",
         }
 
+    def _read_l30_product_code(self, state: DeviceState, node_id: int, timeout_ms: int = 50) -> dict:
+        """读取 L30 产品编码字符串，按最新生产贴标规则补充展示信息。"""
+        request_access = 0
+        read_id = self._build_l30_can_id(
+            state, request_access, PCMD_CONFIG, SCMD_PRODUCT_CODE, dst_id=node_id
+        )
+        self._send_can_frame(state, read_id, encode_empty_payload(), label="l30-product-code-read")
+        if self.mock:
+            code = f"LHT30-06-{state.dev + 1:03d}-L-B-B-A"
+            return {
+                "dev": state.dev,
+                "query_id": f"0x{read_id:08X}",
+                "query_node_id": node_id,
+                "reply_id": "",
+                "matched": True,
+                "info": parse_l30_product_code(code.encode("ascii")),
+                "rx_count": 0,
+            }
+
+        messages = self._receive_canfd(state, timeout_ms=timeout_ms)
+        self._record_rx_frames(state, messages, label="l30-product-code-rx")
+        for can_id, data in messages:
+            rx_id = can_id & 0x1FFFFFFF
+            fields = parse_can_id(rx_id)
+            if (
+                fields["access"] == request_access
+                and fields["pcmd"] == PCMD_CONFIG
+                and fields["scmd"] == SCMD_PRODUCT_CODE
+                and fields["dst_id"] == HOST_ID
+                and fields["src_id"] == node_id
+            ):
+                info = parse_l30_product_code(data)
+                return {
+                    "dev": state.dev,
+                    "query_id": f"0x{read_id:08X}",
+                    "query_node_id": node_id,
+                    "reply_id": f"0x{rx_id:08X}",
+                    "matched": bool(info),
+                    "info": info,
+                    "rx_count": len(messages),
+                }
+        return {
+            "dev": state.dev,
+            "query_id": f"0x{read_id:08X}",
+            "query_node_id": node_id,
+            "reply_id": "",
+            "matched": False,
+            "info": {},
+            "rx_count": len(messages),
+        }
+
+
     def _discover_l30_device_info(self, state: DeviceState, timeout_ms: int = 50) -> dict:
         """轮询 NodeID 读取 L30 DeviceInFo，并把成功结果写回设备状态。"""
         probed_ids = []
@@ -868,8 +929,9 @@ class CanBusController:
         last_query_id = ""
         for node_id in self._l30_probe_node_ids(state):
             probed_ids.append(node_id)
+            request_access = 0
             read_id = self._build_l30_can_id(
-                state, 0, PCMD_CONFIG, SCMD_DEVICE_INFO, dst_id=node_id
+                state, request_access, PCMD_CONFIG, SCMD_DEVICE_INFO, dst_id=node_id
             )
             last_query_id = f"0x{read_id:08X}"
             self._send_can_frame(state, read_id, encode_empty_payload(), label="l30-info-read")
@@ -889,6 +951,8 @@ class CanBusController:
                     "sensor": "华威科",
                     "origin_code": 1,
                     "origin": "北京自装",
+                    "product_code": f"LHT30-06-{state.dev + 1:03d}-L-B-B-A",
+                    "serial_label": f"LHT30-06-{state.dev + 1:03d}",
                 }
                 state.info = {**state.info, **info}
                 return {
@@ -906,19 +970,23 @@ class CanBusController:
             self._record_rx_frames(state, messages, label="l30-info-rx")
             for can_id, data in messages:
                 rx_id = can_id & 0x1FFFFFFF
-                parent = (rx_id >> 21) & 0x0F
-                subcmd = (rx_id >> 13) & 0xFF
-                dst_id = (rx_id >> 8) & 0x1F
-                src_id = (rx_id >> 3) & 0x1F
+                fields = parse_can_id(rx_id)
                 if (
-                    parent == PCMD_CONFIG
-                    and subcmd == SCMD_DEVICE_INFO
-                    and dst_id == HOST_ID
-                    and src_id == node_id
+                    fields["access"] == request_access
+                    and fields["pcmd"] == PCMD_CONFIG
+                    and fields["scmd"] == SCMD_DEVICE_INFO
+                    and fields["dst_id"] == HOST_ID
+                    and fields["src_id"] == node_id
                 ):
                     info = parse_l30_device_info(data)
+                    product_result = {"matched": False, "info": {}, "rx_count": 0}
                     if info:
                         info = {**info, "l30_node_id": int(info.get("node_id", node_id))}
+                        product_result = self._read_l30_product_code(
+                            state, int(info.get("node_id", node_id)), timeout_ms=timeout_ms
+                        )
+                        if product_result.get("matched") and product_result.get("info"):
+                            info = {**info, **(product_result.get("info") or {})}
                         state.info = {**state.info, **info}
                     return {
                         "dev": state.dev,
@@ -927,8 +995,9 @@ class CanBusController:
                         "reply_id": f"0x{rx_id:08X}",
                         "matched": True,
                         "info": info,
-                        "rx_count": rx_total,
+                        "rx_count": rx_total + int(product_result.get("rx_count", 0)),
                         "probed_ids": probed_ids,
+                        "product_code": product_result,
                     }
         return {
             "dev": state.dev,
@@ -1039,7 +1108,8 @@ class CanBusController:
             print(f"RX-PROBE DEV{state.dev} {label} count={len(messages)}", flush=True)
         for can_id, data in messages:
             rx_id = can_id & 0x1FFFFFFF
-            register = (rx_id >> 13) & 0xFF
+            fields = parse_can_id(rx_id)
+            register = fields["scmd"]
             if label.startswith(("o20", "l30")):
                 print(
                     f"RX DEV{state.dev} {label} 0x{rx_id:08X} "
@@ -1048,10 +1118,11 @@ class CanBusController:
                 )
             if label.startswith("l30"):
                 parsed: dict[str, object] = {
-                    "pcmd": f"0x{(rx_id >> 21) & 0x0F:02X}",
+                    "access": fields["access"],
+                    "pcmd": f"0x{fields['pcmd']:02X}",
                     "scmd": f"0x{register:02X}",
-                    "dst_id": (rx_id >> 8) & 0x1F,
-                    "src_id": (rx_id >> 3) & 0x1F,
+                    "dst_id": fields["dst_id"],
+                    "src_id": fields["src_id"],
                 }
                 if len(data) >= 3:
                     status = parse_l30_status(data)
@@ -1061,6 +1132,10 @@ class CanBusController:
                     info = parse_l30_device_info(data)
                     if info:
                         parsed["device_info"] = info
+                elif label == "l30-product-code-rx":
+                    info = parse_l30_product_code(data)
+                    if info:
+                        parsed["product_code"] = info
             else:
                 parsed = {
                     "device_id": (rx_id >> 21) & 0xFF,
