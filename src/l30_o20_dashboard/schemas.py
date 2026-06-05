@@ -74,6 +74,7 @@ class SensorDeviceProfile(BaseModel):
 
     model: str = "unknown"
     device_id: int = Field(default=O20_DEFAULT_DEVICE_ID, ge=1, le=255)
+    confirmed: bool = False
 
 
 class SensorReadRequest(DeviceSelection):

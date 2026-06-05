@@ -396,27 +396,34 @@ class CanBusController:
         with self.lock:
             for state in self._selected_existing_open_devices(dev_ids):
                 model, device_id = self._sensor_model_for_state(state, profile_map.get(state.dev))
-                if model == "l30":
-                    results.append(self._query_l30_tactile_sensors(state, timeout_ms=timeout_ms))
-                elif model == "o20":
-                    results.append(
-                        self._query_o20_tactile_sensors(
-                            state,
-                            device_id=device_id or O20_DEFAULT_DEVICE_ID,
-                            timeout_ms=timeout_ms,
+                try:
+                    if model == "l30":
+                        self._drain_state_rx_buffer(state)
+                        results.append(self._query_l30_tactile_sensors(state, timeout_ms=timeout_ms))
+                    elif model == "o20":
+                        self._drain_state_rx_buffer(state)
+                        results.append(
+                            self._query_o20_tactile_sensors(
+                                state,
+                                device_id=device_id or O20_DEFAULT_DEVICE_ID,
+                                timeout_ms=timeout_ms,
+                            )
                         )
-                    )
-                else:
+                    else:
+                        results.append(
+                            self._sensor_error_payload(
+                                state,
+                                model="unknown",
+                                message="设备型号未确认，请先执行设备查询，再开始传感器监控",
+                            )
+                        )
+                except (RuntimeError, OSError) as exc:
                     results.append(
-                        {
-                            "dev": state.dev,
-                            "model": "unknown",
-                            "supported": False,
-                            "message": "设备型号未知，请先执行设备查询或在传感器页手动选择型号",
-                            "fingers": [],
-                            "summary": {"online_fingers": 0, "max": 0, "avg": 0},
-                            "updated_at": time.time(),
-                        }
+                        self._sensor_error_payload(
+                            state,
+                            model=model,
+                            message=self.explain_error(str(exc)),
+                        )
                     )
         return results
 
@@ -433,24 +440,33 @@ class CanBusController:
     ) -> tuple[str, int | None]:
         """根据前端 profile 和后端已缓存信息判断设备型号。"""
         profile_model = str(self._sensor_profile_value(profile, "model", "") or "").lower()
+        profile_confirmed = bool(self._sensor_profile_value(profile, "confirmed", False))
         profile_device_id = self._sensor_profile_value(profile, "device_id", None)
         try:
             device_id = int(profile_device_id) if profile_device_id is not None else None
         except (TypeError, ValueError):
             device_id = None
 
-        if profile_model in {"l30", "o20"}:
-            return profile_model, device_id
-
         info = state.info or {}
         product = str(info.get("product") or info.get("model") or "").lower()
+        cached_model = "unknown"
         if product == "l30" or info.get("product_id") == 0x13:
-            return "l30", None
-        if product == "o20" or info.get("o20_info"):
+            cached_model = "l30"
+        elif product == "o20" or info.get("o20_info"):
+            cached_model = "o20"
             try:
-                return "o20", int(info.get("o20_device_id") or O20_DEFAULT_DEVICE_ID)
+                device_id = device_id or int(info.get("o20_device_id") or O20_DEFAULT_DEVICE_ID)
             except (TypeError, ValueError):
-                return "o20", O20_DEFAULT_DEVICE_ID
+                device_id = device_id or O20_DEFAULT_DEVICE_ID
+
+        if profile_model in {"l30", "o20"} and cached_model in {"l30", "o20"}:
+            if profile_model != cached_model:
+                return "unknown", device_id
+            return cached_model, device_id
+        if cached_model in {"l30", "o20"}:
+            return cached_model, device_id
+        if profile_model in {"l30", "o20"} and profile_confirmed:
+            return profile_model, device_id
         return "unknown", device_id
 
     def _query_o20_tactile_sensors(
@@ -602,6 +618,40 @@ class CanBusController:
                 time.sleep(0.001)
         self._record_rx_frames(state, messages, label="sensor-l30-rx")
         return matched_frames, len(messages), f"0x{read_id:08X}"
+
+    def _drain_state_rx_buffer(
+        self,
+        state: DeviceState,
+        max_rounds: int = 3,
+        max_count: int = 64,
+        timeout_ms: int = 1,
+    ) -> int:
+        """传感器主动查询前清理旧 RX，避免旧回传堆积影响后续读事务。"""
+        if self.mock:
+            return 0
+        total = 0
+        for _round in range(max(1, int(max_rounds))):
+            messages = self._receive_canfd(
+                state,
+                max_count=max(1, int(max_count)),
+                timeout_ms=max(0, int(timeout_ms)),
+            )
+            if not messages:
+                break
+            total += len(messages)
+        return total
+
+    def _sensor_error_payload(self, state: DeviceState, model: str, message: str) -> dict:
+        """返回单设备传感器错误，避免一个设备失败中断整批监控。"""
+        return {
+            "dev": state.dev,
+            "model": model,
+            "supported": False,
+            "message": message,
+            "fingers": [],
+            "summary": {"online_fingers": 0, "max": 0, "avg": 0},
+            "updated_at": time.time(),
+        }
 
     def _matched_l30_tactile_frames(
         self,

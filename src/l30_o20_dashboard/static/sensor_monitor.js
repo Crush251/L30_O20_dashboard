@@ -19,15 +19,16 @@
         running: false,
         busy: false,
         timer: 0,
-        intervalMs: 200
+        intervalMs: 500
     };
 
     const els = {};
 
     function bindElements() {
         for (const id of [
-            "sensorView", "dashboardView", "sensorRefreshBtn", "sensorDeviceList", "sensorReadOnceBtn",
-            "sensorStartBtn", "sensorStopBtn", "sensorIntervalMs", "sensorStatus", "sensorCards"
+            "sensorView", "dashboardView", "sensorRefreshBtn", "sensorDeviceList", "sensorQueryBtn",
+            "sensorReadOnceBtn", "sensorStartBtn", "sensorStopBtn", "sensorIntervalMs", "sensorStatus",
+            "sensorCards"
         ]) {
             els[id] = document.getElementById(id);
         }
@@ -73,7 +74,7 @@
     function profileFor(dev) {
         const key = String(dev);
         if (!state.profiles[key]) {
-            state.profiles[key] = { model: "unknown", deviceId: 1 };
+            state.profiles[key] = { model: "unknown", deviceId: 1, confirmed: false };
         }
         return state.profiles[key];
     }
@@ -85,8 +86,10 @@
         if (String(info.product || info.model || "").toLowerCase() === "o20" || info.o20_info) {
             profile.model = "o20";
             profile.deviceId = Number(info.o20_device_id) || 1;
+            profile.confirmed = true;
         } else if (info.product === "L30" || info.product_id === 0x13) {
             profile.model = "l30";
+            profile.confirmed = true;
         }
         return profile;
     }
@@ -194,8 +197,11 @@
             item.querySelector(".sensor-model-select").addEventListener("change", (event) => {
                 const next = event.target.value;
                 const dev = Number(event.target.dataset.dev);
-                profileFor(dev).model = next;
+                const profile = profileFor(dev);
+                profile.model = next;
+                profile.confirmed = false;
                 renderSensorDeviceList();
+                setSensorStatus("手动型号未确认，请先执行设备查询再开始监控");
             });
             const nodeSelect = item.querySelector(".sensor-device-id");
             if (nodeSelect) {
@@ -210,13 +216,68 @@
     function requestProfiles(devices) {
         return Object.fromEntries(devices.map((dev) => {
             const profile = profileFor(dev);
-            return [String(dev), { model: profile.model, device_id: Number(profile.deviceId) || 1 }];
+            return [
+                String(dev),
+                {
+                    model: profile.model,
+                    device_id: Number(profile.deviceId) || 1,
+                    confirmed: Boolean(profile.confirmed)
+                }
+            ];
         }));
+    }
+
+    async function querySensorDevices() {
+        const devices = selectedDevices().filter((dev) =>
+            state.devices.some((item) => item.dev === dev && item.opened)
+        );
+        if (!devices.length) {
+            setSensorStatus("请先勾选已连接设备");
+            return;
+        }
+        try {
+            const result = await api("/api/devices/query", { devices });
+            for (const profile of result.profiles || []) {
+                const local = profileFor(profile.dev);
+                if (profile.model === "o20") {
+                    local.model = "o20";
+                    local.deviceId = Number(profile.device_id) || 1;
+                    local.confirmed = true;
+                } else if (profile.model === "l30") {
+                    local.model = "l30";
+                    local.confirmed = true;
+                } else {
+                    local.model = "unknown";
+                    local.confirmed = false;
+                }
+            }
+            await refreshSensorDevices(false);
+            setSensorStatus("设备查询完成，可开始监控");
+        } catch (error) {
+            setSensorStatus(error.message);
+        }
     }
 
     async function readSensors({ scheduleNext = false } = {}) {
         if (state.busy) return;
         const devices = selectedDevices().filter((dev) => state.devices.some((item) => item.dev === dev && item.opened));
+        const unconfirmed = devices.filter((dev) => {
+            const profile = profileFor(dev);
+            return !profile.confirmed || !["l30", "o20"].includes(profile.model);
+        });
+        if (unconfirmed.length) {
+            setSensorStatus(`DEV${unconfirmed.join(", DEV")} 型号未确认，请先执行设备查询`);
+            renderSensorCards(unconfirmed.map((dev) => ({
+                dev,
+                model: profileFor(dev).model || "unknown",
+                supported: false,
+                message: "型号未确认，未发送 CANFD 触觉查询",
+                fingers: [],
+                summary: { online_fingers: 0, max: 0, avg: 0 }
+            })));
+            if (scheduleNext) schedulePoll();
+            return;
+        }
         if (!devices.length) {
             setSensorStatus("请先勾选已连接设备");
             if (scheduleNext) schedulePoll();
@@ -334,6 +395,7 @@
         }
         window.addEventListener("hashchange", () => switchView(viewFromLocation(), false));
         els.sensorRefreshBtn.addEventListener("click", () => void refreshSensorDevices(true));
+        els.sensorQueryBtn.addEventListener("click", () => void querySensorDevices());
         els.sensorReadOnceBtn.addEventListener("click", () => void readSensors());
         els.sensorStartBtn.addEventListener("click", startMonitor);
         els.sensorStopBtn.addEventListener("click", stopMonitor);

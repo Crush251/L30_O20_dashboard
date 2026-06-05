@@ -14,7 +14,7 @@
         <script src="/static/o20_config.js?v=6" defer></script>
         <script src="/static/follow.js?v=7" defer></script>
         <script src="/static/dashboard.js?v=5" defer></script>
-        <script src="/static/sensor_monitor.js?v=1" defer></script>
+        <script src="/static/sensor_monitor.js?v=2" defer></script>
     </head>
     <body>
         <main class="shell dashboard-shell">
@@ -180,16 +180,16 @@
                     </div>
                     <div class="sensor-device-list" id="sensorDeviceList"></div>
                     <div class="sensor-actions">
+                        <button class="tool-button" id="sensorQueryBtn" type="button">设备查询</button>
                         <button id="sensorReadOnceBtn" type="button">读取一次</button>
                         <button class="tool-button" id="sensorStartBtn" type="button">开始监控</button>
                         <button class="tool-button" id="sensorStopBtn" type="button" disabled>停止</button>
                         <label class="compact-field">
                             <span>间隔</span>
                             <select id="sensorIntervalMs">
-                                <option value="120">120ms</option>
-                                <option value="200" selected>200ms</option>
-                                <option value="500">500ms</option>
+                                <option value="500" selected>500ms</option>
                                 <option value="1000">1000ms</option>
+                                <option value="2000">2000ms</option>
                             </select>
                         </label>
                     </div>
