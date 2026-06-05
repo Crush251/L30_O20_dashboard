@@ -109,6 +109,12 @@ Linux：
 
 `amd64` 使用 `libcanbus/libcanbus.so`，`arm64` 使用 `libcanbus/libcanbus_arm64.so`。PyInstaller 需要在对应 CPU 架构的 Linux 机器上打包，不能在 amd64 机器上直接生成 arm64 可执行文件。
 
+Dashboard 的 RPS/Follow 使用前端离线 MediaPipe JS/WASM 资源，后端和 PyInstaller 默认打包不依赖 Python `mediapipe` 或 `opencv-python`，避免 ARM Linux 上因 Python wheel 不兼容导致构建失败。只有运行旧版本地 Python 视觉脚本时才需要安装：
+
+```bash
+uv sync --extra legacy-vision
+```
+
 Windows：
 
 ```bat
