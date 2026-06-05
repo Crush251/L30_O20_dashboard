@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import threading
+import time
 from typing import Any
 
 from .o20_protocol import O20_DEFAULT_DEVICE_ID
@@ -68,6 +69,8 @@ class DanceRunner:
         message = "执行完成"
         try:
             loops_done = 0
+            last_drain_at = time.monotonic()
+            self.controller.drain_rx_buffers(payload.devices, max_rounds=6, timeout_ms=1)
             while not self.stop_event.is_set():
                 if payload.loop_count and loops_done >= payload.loop_count:
                     break
@@ -85,6 +88,7 @@ class DanceRunner:
                             frame_type=getattr(payload, "frame_type", 0x04),
                             label=f"o20-dance:{payload.file}",
                             require_open=True,
+                            probe_after_write=False,
                         )
                     else:
                         self.controller.set_joints(
@@ -94,8 +98,20 @@ class DanceRunner:
                             require_open=True,
                         )
                     sent += 1
+                    now = time.monotonic()
+                    if sent % 8 == 0 or now - last_drain_at >= 0.25:
+                        drained = self.controller.drain_rx_buffers(
+                            payload.devices,
+                            max_rounds=4,
+                            timeout_ms=1,
+                        )
+                        last_drain_at = now
+                    else:
+                        drained = {}
                     with self.lock:
                         self.status["sent"] = sent
+                        if drained:
+                            self.status["rx_drained"] = sum(drained.values())
                     if payload.interval_ms and self.stop_event.wait(payload.interval_ms / 1000):
                         message = "已停止"
                         break
@@ -103,6 +119,10 @@ class DanceRunner:
         except Exception as exc:
             message = self.controller.explain_error(str(exc))
         finally:
+            try:
+                self.controller.drain_rx_buffers(payload.devices, max_rounds=6, timeout_ms=1)
+            except Exception:
+                pass
             with self.lock:
                 self.status["running"] = False
                 self.status["sent"] = sent

@@ -445,6 +445,7 @@ class CanBusController:
         frame_type: int = 0x04,
         label: str = "o20-raw-pos",
         require_open: bool = False,
+        probe_after_write: bool = True,
     ) -> list[dict]:
         """同一帧内向多个 O20 设备发送原始目标位置，每个 DEV 可使用独立左右手指令码。"""
         raw_values = [int(round(float(value))) for value in positions]
@@ -467,8 +468,33 @@ class CanBusController:
                 self._send_can_frame(state, can_id, payload, label=label, frame_type=frame_type)
                 state.joints = state_values
                 results.append(self._device_payload(state))
-        self._schedule_o20_rx_probe(dev_ids, label=f"{label}-rx", timeout_ms=50)
+        if probe_after_write:
+            self._schedule_o20_rx_probe(dev_ids, label=f"{label}-rx", timeout_ms=50)
         return results
+
+    def drain_rx_buffers(
+        self,
+        dev_ids: Iterable[int],
+        max_rounds: int = 4,
+        max_count: int = 64,
+        timeout_ms: int = 1,
+    ) -> dict[int, int]:
+        """主动清理已连接设备的 RX 缓冲，供长时间 dance 执行时防止回传堆积。"""
+        drained: dict[int, int] = {}
+        with self.lock:
+            for state in self._selected_existing_open_devices(dev_ids):
+                total = 0
+                for _round in range(max(1, int(max_rounds))):
+                    messages = self._receive_canfd(
+                        state,
+                        max_count=max(1, int(max_count)),
+                        timeout_ms=max(0, int(timeout_ms)),
+                    )
+                    if not messages:
+                        break
+                    total += len(messages)
+                drained[state.dev] = total
+        return drained
 
     def set_o20_velocity(
         self,
