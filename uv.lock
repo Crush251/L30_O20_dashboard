@@ -494,11 +494,15 @@ source = { editable = "." }
 dependencies = [
     { name = "fastapi" },
     { name = "jinja2" },
-    { name = "mediapipe", marker = "python_full_version < '3.13'" },
-    { name = "opencv-python", marker = "python_full_version < '3.13'" },
     { name = "pydantic" },
     { name = "python-multipart" },
     { name = "uvicorn", extra = ["standard"] },
+]
+
+[package.optional-dependencies]
+legacy-vision = [
+    { name = "mediapipe", marker = "python_full_version < '3.13'" },
+    { name = "opencv-python", marker = "python_full_version < '3.13'" },
 ]
 
 [package.dev-dependencies]
@@ -510,12 +514,13 @@ dev = [
 requires-dist = [
     { name = "fastapi", specifier = ">=0.115.0" },
     { name = "jinja2", specifier = ">=3.1.0" },
-    { name = "mediapipe", marker = "python_full_version < '3.13'", specifier = ">=0.10.14" },
-    { name = "opencv-python", marker = "python_full_version < '3.13'", specifier = ">=4.10.0" },
+    { name = "mediapipe", marker = "python_full_version < '3.13' and extra == 'legacy-vision'", specifier = ">=0.10.14" },
+    { name = "opencv-python", marker = "python_full_version < '3.13' and extra == 'legacy-vision'", specifier = ">=4.10.0" },
     { name = "pydantic", specifier = ">=2.8.0" },
     { name = "python-multipart", specifier = ">=0.0.9" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.30.0" },
 ]
+provides-extras = ["legacy-vision"]
 
 [package.metadata.requires-dev]
 dev = [{ name = "pyinstaller", specifier = ">=6.0" }]
