@@ -19,7 +19,7 @@
         running: false,
         busy: false,
         timer: 0,
-        intervalMs: 500
+        intervalMs: 200
     };
 
     const els = {};
@@ -58,6 +58,11 @@
         return Math.max(min, Math.min(max, Number(value) || 0));
     }
 
+    function normalizeIntervalMs(value) {
+        const numeric = Number(value);
+        return clamp(Number.isFinite(numeric) && String(value).trim() !== "" ? numeric : 200, 10, 1000);
+    }
+
     function setSensorStatus(text) {
         if (els.sensorStatus) els.sensorStatus.textContent = text;
     }
@@ -65,6 +70,26 @@
     function setGlobalStatus(text) {
         const runtime = document.getElementById("runtimeStatus");
         if (runtime) runtime.textContent = text;
+    }
+
+    function hasMockSensorData(payload, results) {
+        return Boolean(payload?.mock) || results.some((item) => Boolean(item?.mock));
+    }
+
+    function sensorSourceText(payload, results) {
+        return hasMockSensorData(payload, results) ? "Mock 演示数据" : "硬件实时数据";
+    }
+
+    function formatSensorTime(timestamp) {
+        const value = Number(timestamp);
+        if (!Number.isFinite(value) || value <= 0) return "";
+        return new Date(value * 1000).toLocaleTimeString("zh-CN", { hour12: false });
+    }
+
+    function latestSensorTimeText(results) {
+        const latest = Math.max(0, ...results.map((item) => Number(item?.updated_at) || 0));
+        const text = formatSensorTime(latest);
+        return text ? `时间 ${text}` : "";
     }
 
     function selectedDevices() {
@@ -259,7 +284,10 @@
     }
 
     async function readSensors({ scheduleNext = false } = {}) {
-        if (state.busy) return;
+        if (state.busy) {
+            if (scheduleNext && state.running) schedulePoll();
+            return;
+        }
         const devices = selectedDevices().filter((dev) => state.devices.some((item) => item.dev === dev && item.opened));
         const unconfirmed = devices.filter((dev) => {
             const profile = profileFor(dev);
@@ -273,7 +301,8 @@
                 supported: false,
                 message: "型号未确认，未发送 CANFD 触觉查询",
                 fingers: [],
-                summary: { online_fingers: 0, max: 0, avg: 0 }
+                summary: { online_fingers: 0, max: 0, avg: 0 },
+                mock: false
             })));
             if (scheduleNext) schedulePoll();
             return;
@@ -285,14 +314,28 @@
         }
         state.busy = true;
         try {
-            const payload = await api("/api/sensors/read", { devices, profiles: requestProfiles(devices) });
-            for (const result of payload.devices || []) {
+            const payload = await api("/api/sensors/read", {
+                devices,
+                profiles: requestProfiles(devices)
+            });
+            const results = payload.devices || [];
+            for (const result of results) {
                 state.results[String(result.dev)] = result;
             }
-            renderSensorCards(payload.devices || []);
-            const maxValue = Math.max(0, ...(payload.devices || []).map((item) => Number(item.summary?.max) || 0));
-            setSensorStatus(`已更新 ${devices.length} 个设备 · 峰值 ${maxValue}`);
-            setGlobalStatus(`传感器 · ${devices.length} 个设备`);
+            renderSensorCards(results);
+            const maxValue = Math.max(0, ...results.map((item) => Number(item.summary?.max) || 0));
+            const sourceText = sensorSourceText(payload, results);
+            const timeText = latestSensorTimeText(results);
+            const transmitError = results.find((item) => (
+                !item.supported && /CANFD_Transmit|CANFD 发送失败/.test(String(item.message || ""))
+            ));
+            if (transmitError) {
+                stopMonitor();
+                setSensorStatus(`${sourceText} · DEV${transmitError.dev} 发送失败，监控已停止 · ${transmitError.message || "传感器读取失败"}`);
+            } else {
+                setSensorStatus(`${sourceText} · 已更新 ${devices.length} 个设备 · 峰值 ${maxValue}${timeText ? ` · ${timeText}` : ""}`);
+            }
+            setGlobalStatus(`传感器 · ${sourceText} · ${devices.length} 个设备`);
         } catch (error) {
             setSensorStatus(error.message);
             stopMonitor();
@@ -308,6 +351,7 @@
     }
 
     function startMonitor() {
+        if (state.running) return;
         state.running = true;
         els.sensorStartBtn.disabled = true;
         els.sensorStopBtn.disabled = false;
@@ -337,11 +381,19 @@
                 : result.node_id
                   ? `Node ${result.node_id}`
                   : "";
+            const metaParts = [
+                ...(nodeText ? [nodeText] : []),
+                result.mock ? "Mock 演示" : "硬件实时",
+                `在线 ${summary.online_fingers || 0}/5`,
+                `平均 ${summary.avg || 0}`
+            ];
+            const updatedAt = formatSensorTime(result.updated_at);
+            if (updatedAt) metaParts.push(`时间 ${updatedAt}`);
             card.innerHTML = `
                 <div class="sensor-card-head">
                     <div>
                         <h2>DEV${result.dev} ${MODEL_LABELS[result.model] || "未知"}</h2>
-                        <p>${escapeHtml(nodeText)} · 在线 ${summary.online_fingers || 0}/5 · 平均 ${summary.avg || 0}</p>
+                        <p>${metaParts.map(escapeHtml).join(" · ")}</p>
                     </div>
                     <strong class="sensor-peak">${summary.max || 0}</strong>
                 </div>
@@ -399,10 +451,15 @@
         els.sensorReadOnceBtn.addEventListener("click", () => void readSensors());
         els.sensorStartBtn.addEventListener("click", startMonitor);
         els.sensorStopBtn.addEventListener("click", stopMonitor);
-        els.sensorIntervalMs.addEventListener("change", (event) => {
-            state.intervalMs = Number(event.target.value) || 200;
+        const updateInterval = (event, commit = false) => {
+            const next = normalizeIntervalMs(event.target.value);
+            state.intervalMs = next;
+            if (commit) event.target.value = String(next);
             if (state.running) schedulePoll();
-        });
+        };
+        els.sensorIntervalMs.addEventListener("input", (event) => updateInterval(event));
+        els.sensorIntervalMs.addEventListener("change", (event) => updateInterval(event, true));
+        els.sensorIntervalMs.addEventListener("blur", (event) => updateInterval(event, true));
     }
 
     function init() {

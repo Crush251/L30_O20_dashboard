@@ -14,7 +14,7 @@
         <script src="/static/o20_config.js?v=6" defer></script>
         <script src="/static/follow.js?v=7" defer></script>
         <script src="/static/dashboard.js?v=5" defer></script>
-        <script src="/static/sensor_monitor.js?v=2" defer></script>
+        <script src="/static/sensor_monitor.js?v=5" defer></script>
     </head>
     <body>
         <main class="shell dashboard-shell">
@@ -186,11 +186,7 @@
                         <button class="tool-button" id="sensorStopBtn" type="button" disabled>停止</button>
                         <label class="compact-field">
                             <span>间隔</span>
-                            <select id="sensorIntervalMs">
-                                <option value="500" selected>500ms</option>
-                                <option value="1000">1000ms</option>
-                                <option value="2000">2000ms</option>
-                            </select>
+                            <input id="sensorIntervalMs" type="number" min="10" max="1000" step="10" value="200" />
                         </label>
                     </div>
                     <div class="sensor-status" id="sensorStatus">选择已连接设备后读取</div>

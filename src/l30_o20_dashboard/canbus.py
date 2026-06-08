@@ -388,7 +388,8 @@ class CanBusController:
         self,
         dev_ids: Iterable[int],
         profiles: dict[int, object] | None = None,
-        timeout_ms: int = 120,
+        drain: bool = False,
+        timeout_ms: int = 30,
     ) -> list[dict]:
         """主动读取已连接设备的触觉传感器数据，并按统一结构返回。"""
         profile_map = {int(dev): profile for dev, profile in (profiles or {}).items()}
@@ -397,11 +398,11 @@ class CanBusController:
             for state in self._selected_existing_open_devices(dev_ids):
                 model, device_id = self._sensor_model_for_state(state, profile_map.get(state.dev))
                 try:
-                    if model == "l30":
+                    if drain and model in {"l30", "o20"}:
                         self._drain_state_rx_buffer(state)
+                    if model == "l30":
                         results.append(self._query_l30_tactile_sensors(state, timeout_ms=timeout_ms))
                     elif model == "o20":
-                        self._drain_state_rx_buffer(state)
                         results.append(
                             self._query_o20_tactile_sensors(
                                 state,
@@ -473,7 +474,7 @@ class CanBusController:
         self,
         state: DeviceState,
         device_id: int,
-        timeout_ms: int = 120,
+        timeout_ms: int = 30,
     ) -> dict:
         """按 O20 0x09~0x12 主动读取五指触觉数据。"""
         if self.mock:
@@ -519,6 +520,7 @@ class CanBusController:
             "fingers": fingers,
             "summary": tactile_summary(fingers),
             "updated_at": time.time(),
+            "mock": False,
         }
 
     def _read_o20_tactile_register(
@@ -538,28 +540,52 @@ class CanBusController:
             label="sensor-o20-read",
             frame_type=O20_FRAME_TYPE,
         )
-        messages = self._receive_canfd(state, timeout_ms=timeout_ms)
+        deadline = time.monotonic() + max(0.01, timeout_ms / 1000)
+        messages: list[tuple[int, bytes]] = []
+        matched: bytes | None = None
+        while time.monotonic() < deadline:
+            remaining_ms = max(1, min(20, int((deadline - time.monotonic()) * 1000)))
+            batch = self._receive_canfd(state, timeout_ms=remaining_ms)
+            if not batch:
+                time.sleep(0.001)
+                continue
+            messages.extend(batch)
+            for can_id, data in batch:
+                rx_id = can_id & 0x1FFFFFFF
+                rx_device_id = (rx_id >> 21) & 0xFF
+                rx_register = (rx_id >> 13) & 0xFF
+                if rx_device_id == int(device_id) and rx_register == int(register_addr):
+                    matched = bytes(data[:expected_length])
+                    break
+            if matched is not None:
+                break
         self._record_rx_frames(state, messages, label="sensor-o20-rx")
-        for can_id, data in messages:
-            rx_id = can_id & 0x1FFFFFFF
-            rx_device_id = (rx_id >> 21) & 0xFF
-            rx_register = (rx_id >> 13) & 0xFF
-            if rx_device_id == int(device_id) and rx_register == int(register_addr):
-                return bytes(data[:expected_length]), len(messages)
-        return None, len(messages)
+        return matched, len(messages)
 
-    def _query_l30_tactile_sensors(self, state: DeviceState, timeout_ms: int = 120) -> dict:
-        """按 L30 v2 父命令 0x2 主动读取五指 12x6 触觉矩阵。"""
+    def _query_l30_tactile_sensors(self, state: DeviceState, timeout_ms: int = 30) -> dict:
+        """按 L30 v2 触觉协议一次读取五指，并统一返回五指点阵。"""
         if self.mock:
             return self._mock_tactile_result(state, model="l30", node_id=self._l30_node_id(state))
 
         node_id = self._l30_node_id(state)
         fingers = []
         for finger_index, spec in enumerate(FINGER_SENSOR_SPECS):
-            frames, rx_count, query_id = self._read_l30_tactile_finger(
-                state, node_id, spec.l30_scmd, timeout_ms
-            )
-            parsed = parse_l30_tactile_frames(frames)
+            try:
+                frames, rx_count, query_id = self._read_l30_tactile_finger(
+                    state, node_id, spec.l30_scmd, timeout_ms
+                )
+                parsed = parse_l30_tactile_frames(frames)
+                error = "" if parsed.get("online") else "未收到完整 L30 触觉多帧回传"
+            except RuntimeError as exc:
+                parsed = parse_l30_tactile_frames([])
+                rx_count = 0
+                query_id = ""
+                error_message = self.explain_error(str(exc))
+                error = (
+                    "本指读取失败：CANFD 发送失败，已跳过本轮"
+                    if "CANFD_Transmit" in error_message or "CANFD 发送失败" in error_message
+                    else error_message
+                )
             fingers.append(
                 {
                     "key": spec.key,
@@ -576,10 +602,13 @@ class CanBusController:
                     "expected_frames": parsed.get("expected_frames"),
                     "rx_count": rx_count,
                     "query_id": query_id,
-                    "error": "" if parsed.get("online") else "未收到完整 L30 触觉多帧回传",
+                    "error": error,
                     "order": finger_index,
+                    "updated_at": time.time(),
                 }
             )
+            if finger_index < len(FINGER_SENSOR_SPECS) - 1:
+                time.sleep(0.01)
         return {
             "dev": state.dev,
             "model": "l30",
@@ -588,6 +617,8 @@ class CanBusController:
             "fingers": fingers,
             "summary": tactile_summary(fingers),
             "updated_at": time.time(),
+            "mock": False,
+            "scan_mode": "five-finger",
         }
 
     def _read_l30_tactile_finger(
@@ -601,7 +632,13 @@ class CanBusController:
         read_id = self._build_l30_can_id(
             state, 0, PCMD_TACTILE_SENSOR, scmd, dst_id=node_id
         )
-        self._send_can_frame(state, read_id, encode_empty_payload(), label="sensor-l30-read")
+        self._send_can_frame_with_fallback(
+            state,
+            read_id,
+            encode_empty_payload(),
+            label="sensor-l30-read",
+            frame_types=(0x04,),
+        )
         deadline = time.monotonic() + max(0.01, timeout_ms / 1000)
         messages: list[tuple[int, bytes]] = []
         matched_frames: list[bytes] = []
@@ -651,6 +688,7 @@ class CanBusController:
             "fingers": [],
             "summary": {"online_fingers": 0, "max": 0, "avg": 0},
             "updated_at": time.time(),
+            "mock": self.mock,
         }
 
     def _matched_l30_tactile_frames(
@@ -1454,6 +1492,30 @@ class CanBusController:
                 f"status={frame.get('status') or 'unavailable'}"
             )
         return ret
+
+    def _send_can_frame_with_fallback(
+        self,
+        state: DeviceState,
+        can_id: int,
+        data: bytes,
+        label: str,
+        frame_types: Iterable[int],
+    ) -> int:
+        last_error: RuntimeError | None = None
+        for frame_type in frame_types:
+            for attempt in range(3):
+                try:
+                    return self._send_can_frame(
+                        state, can_id, data, label=label, frame_type=frame_type
+                    )
+                except RuntimeError as exc:
+                    last_error = exc
+                    if attempt < 2:
+                        time.sleep(0.03 * (attempt + 1))
+            time.sleep(0.025)
+        if last_error is not None:
+            raise last_error
+        return self._send_can_frame(state, can_id, data, label=label)
 
     def _transmit_canfd(self, state: DeviceState, msg: CanFDMsg) -> int:
         return int(

@@ -81,6 +81,7 @@ class SensorReadRequest(DeviceSelection):
     """传感器主动查询请求，profiles 用于区分 L30/O20 和 O20 左右手节点。"""
 
     profiles: dict[int, SensorDeviceProfile] = Field(default_factory=dict)
+    drain: bool = False
 
 
 class GameRequest(DeviceSelection):

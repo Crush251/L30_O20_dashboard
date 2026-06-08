@@ -261,9 +261,11 @@ def create_app() -> FastAPI:
         """主动读取已连接 L30/O20 设备的触觉传感器点阵。"""
         try:
             return {
+                "mock": controller.mock,
                 "devices": controller.query_tactile_sensors(
                     payload.devices,
                     profiles=payload.profiles,
+                    drain=payload.drain,
                 )
             }
         except (RuntimeError, ValueError, OSError) as exc:
